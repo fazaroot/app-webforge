@@ -169,7 +169,7 @@ COMMON_CMAKE_ARGS=(
   -DWITH_UNIT_TESTS=OFF
   -DWITH_EMBEDDED_SERVER=OFF
   -DWITH_SYSTEMD=no
-  -DWITH_PCRE=bundled
+  -DWITH_PCRE=system
   -DPLUGIN_AUTH_SOCKET=NO
   -DPLUGIN_AUTH_PAM=NO
   -DPLUGIN_AUTH_ED25519=NO
@@ -229,6 +229,29 @@ if [ ! -f "$PREFIX/lib/libncurses.a" ]; then
 fi
 [ -f "$PREFIX/lib/libncurses.a" ] || fail "libncurses.a tidak terbuild"
 
+# --- PCRE2 statis target (ExternalProject bundled MariaDB tidak mewarisi toolchain) ---
+if [ ! -f "$PREFIX/lib/libpcre2-8.a" ]; then
+  log "build PCRE2 10.44 (statis)"
+  if [ ! -f "$WORK_DIR/pcre2.tar.gz" ]; then
+    curl -fsSL --retry 3 -o "$WORK_DIR/pcre2.tar.gz.tmp" "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.44/pcre2-10.44.tar.gz"
+    mv "$WORK_DIR/pcre2.tar.gz.tmp" "$WORK_DIR/pcre2.tar.gz"
+  fi
+  rm -rf "$WORK_DIR/pcre2-10.44"
+  tar -xzf "$WORK_DIR/pcre2.tar.gz" -C "$WORK_DIR"
+  (
+    cd "$WORK_DIR/pcre2-10.44"
+    CC="$CC" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP" ./configure \
+      --host=aarch64-linux-android \
+      --prefix="$PREFIX" \
+      --disable-shared --enable-static \
+      --disable-jit \
+      --enable-unicode
+    make -j"$(nproc)"
+    make install
+  )
+fi
+[ -f "$PREFIX/lib/libpcre2-8.a" ] || fail "libpcre2-8.a tidak terbuild"
+
 # --- Target build Android ---
 log "configure MariaDB $MARIADB_VERSION untuk aarch64-linux-android$ANDROID_API"
 cmake -S "$MARIADB_SRC" -B "$TARGET_BUILD" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
@@ -240,6 +263,8 @@ cmake -S "$MARIADB_SRC" -B "$TARGET_BUILD" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DCMAKE_C_FLAGS="-D_GNU_SOURCE -Dushort=\"unsigned short\" -include ctype.h -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types" \
   -DCMAKE_CXX_FLAGS="-D_GNU_SOURCE -Dushort=\"unsigned short\" -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types" \
   -DCURSES_LIBRARY="$PREFIX/lib/libncurses.a" \
+  -DPCRE2_LIBRARY="$PREFIX/lib/libpcre2-8.a" \
+  -DPCRE2_INCLUDE_DIR="$PREFIX/include" \
   -DCURSES_INCLUDE_PATH="$PREFIX/include" \
   -DIMPORT_EXECUTABLES="$HOST_BUILD/import_executables.cmake" \
   -DWITH_SSL=system \
