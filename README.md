@@ -3,12 +3,12 @@
 Lingkungan server web dan pengembangan yang berjalan **langsung di HP Android**, tanpa root dan tanpa PC. WebForge Mobile membundel core Rust di dalam aplikasi Android (lewat JNI), menyajikan antarmuka React di WebView Capacitor, dan mengelola proyek web yang tersimpan di workspace milik aplikasi.
 
 - **Application ID:** `com.webforge.mobile`
-- **Versi:** `0.2.0` (Phase 1 + anti-stuck + bundle PHP)
+- **Versi:** `0.3.0` (bundle Caddy/Nginx/Apache/Python/Node.js/PostgreSQL/MariaDB + skeleton UI + tombol tema)
 - **Platform:** Android `minSdk 26` (Android 8.0), `targetSdk 35`, fokus ARM64 (`arm64-v8a`)
 - **Perangkat uji utama:** Xiaomi POCO M6 (ARM64)
 - **Build:** GitHub Actions (APK debug), tanpa Android Studio lokal
 
-> **Status jujur v0.2.0:** yang berjalan adalah **static server Rust**, deteksi framework, file manager, SQLite manager, terminal terbatas, monitoring `/proc`, logs, dan diagnostics. **PHP 8.3 kini dibundel** (`libphp.so` hasil cross-compile CI) dengan engine `php -S`, php.ini terkelola, PHP info, dan CLI runner — statusnya "terbuild di CI, menunggu tes perangkat" sampai terverifikasi di POCO M6. Runtime Nginx, Apache, Python, Node.js, MariaDB, dan PostgreSQL **belum dibundel** — aplikasi menampilkannya sebagai "Belum tersedia" beserta alasannya, bukan sebagai tombol mati. Rencana bundelnya ada di [docs/RUNTIME_PLAN.md](docs/RUNTIME_PLAN.md), dan matriks lengkapnya di [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+> **Status jujur v0.3.0:** static server Rust, deteksi framework, file manager, SQLite manager, terminal terbatas, monitoring `/proc`, logs, dan diagnostics tetap berjalan. Runtime **PHP 8.3, Caddy, Nginx, Apache httpd, Python 3.12, Node.js (nodejs-mobile), PostgreSQL 16, dan MariaDB 10.11 kini dibundel** sebagai binary ARM64 di APK hasil CI (run 45658924919 hijau; APK 96.823.579 byte). Status runtime baru adalah "terbuild di CI, menunggu tes perangkat": binary benar-benar ada di APK dan terdeteksi core, tetapi health check di POCO M6 belum terlapor. Matriks lengkap dan batasan per runtime ada di [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md); metode bundel di [docs/RUNTIME_PLAN.md](docs/RUNTIME_PLAN.md).
 >
 > **Perbaikan anti-stuck v0.2.0:** laporan tes perangkat v0.1.0 menunjukkan server stuck saat aplikasi di background (CPU suspend). v0.2.0 menambahkan partial WakeLock selama ada server running (bisa dimatikan di Pengaturan), watchdog yang me-restart core yang mati, auto-restart server yang crash, dan tombol permintaan pengecualian optimasi baterai. Cara mengetes: start server, kunci layar beberapa menit, lalu refresh URL server dari browser/perangkat lain tanpa membuka aplikasi — halaman harus tetap merespons. Di HyperOS tetap aktifkan Autostart dan baterai "Tanpa batasan" secara manual; aplikasi tidak bisa mengubah pengaturan itu sendiri.
 
@@ -19,7 +19,7 @@ Semua fitur di bawah terhubung ke endpoint core yang nyata. Status server `runni
 | Fitur | Keterangan |
 |---|---|
 | Static server Rust | Menyajikan file statis dari document root proyek. Di Android berjalan sebagai task in-process di core; di host dev sebagai proses anak `webforge-core serve-static`. Port bisa dipilih, bind LAN bersifat opt-in. |
-| Deteksi framework | Pemindaian file proyek mengenali 17 pola framework/stack (Static HTML, Native PHP, Laravel, CodeIgniter 4, Symfony, WordPress, Flask, Django, FastAPI, Express, NestJS, Next.js, Nuxt, Vue, React, Angular, SvelteKit) dan melaporkan `readiness`: `ready`, `needs_runtime`, `needs_dependencies`, atau `unknown`. Deteksi bukan berarti bisa dijalankan — proyek PHP terdeteksi dengan benar tetapi tetap `needs_runtime` selama PHP belum dibundel. |
+| Deteksi framework | Pemindaian file proyek mengenali 17 pola framework/stack (Static HTML, Native PHP, Laravel, CodeIgniter 4, Symfony, WordPress, Flask, Django, FastAPI, Express, NestJS, Next.js, Nuxt, Vue, React, Angular, SvelteKit) dan melaporkan `readiness`: `ready`, `needs_runtime`, `needs_dependencies`, atau `unknown`. Deteksi bukan berarti bisa dijalankan — proyek tetap `needs_dependencies` bila dependensinya (mis. `vendor/`, `node_modules`, requirements) belum ada. |
 | File manager + code editor | List, baca (maks. 1 MB, file biner ditolak), tulis, buat folder, rename, copy, move, delete, pencarian nama rekursif, dan ukuran direktori. Semua path divalidasi agar tetap di dalam folder proyek; traversal ditolak. Editor memakai CodeMirror 6 dan menyimpan lewat API yang sama. |
 | SQLite manager | Buat/hapus database SQLite di folder data aplikasi, lihat tabel dan kolom, jalankan query SQL (SELECT maupun DML), backup, dan restore dari folder backup. |
 | Terminal | Eksekusi perintah `sh -c` di folder proyek/workspace dengan timeout 30 detik, streaming lewat WebSocket, dan riwayat perintah. Ini shell Android yang terbatas — bukan bash Linux lengkap dan tidak ada manajer paket. |
@@ -35,8 +35,9 @@ Build resmi dilakukan di GitHub Actions, karena pengembangan dilakukan tanpa PC/
 1. Push ke branch `main` (atau jalankan workflow manual) memicu `.github/workflows/android.yml`.
 2. Job `core`: `cargo test` + build Rust.
 3. Job `frontend`: `npm ci`, test, dan build Vite ke `frontend/dist`.
-4. Job `android`: JDK 21, Node 22, Rust + `cargo-ndk` untuk target `aarch64-linux-android`, hasil `libwebforge_core.so` disalin ke `jniLibs/arm64-v8a/`, Capacitor sync, lalu Gradle `assembleDebug`.
-5. APK divalidasi berisi `AndroidManifest.xml`, `classes.dex`, dan `lib/arm64-v8a/libwebforge_core.so`, lalu diunggah sebagai artifact `webforge-debug-apk`.
+4. Job per runtime (`build-php`, `build-caddy`, `build-nginx`, `build-apache`, `build-python`, `build-node`, `build-postgres`, `build-mariadb`): cross-compile ARM64 dengan cache, menghasilkan `.so` + asset runtime.
+5. Job `android`: JDK 21, Node 22, Rust + `cargo-ndk` untuk target `aarch64-linux-android`, semua `.so` runtime disalin ke `jniLibs/arm64-v8a/`, asset runtime ke `assets/`, Capacitor sync, lalu Gradle `assembleDebug`.
+6. APK divalidasi berisi `AndroidManifest.xml`, `classes.dex`, semua `lib/arm64-v8a/lib*.so` runtime, dan asset runtime, lalu diunggah sebagai artifact `webforge-debug-apk`.
 
 File `.so` hasil build **tidak** di-commit ke repo; CI yang membuatnya. Untuk pengembangan core di host Linux biasa:
 
@@ -56,7 +57,7 @@ cargo run --bin webforge-core   # management API di 127.0.0.1:8765
 6. Bind LAN bersifat opt-in per server. Aktifkan hanya di jaringan tepercaya: siapa pun di jaringan yang sama bisa membuka situs yang disajikan. Management API sendiri selalu hanya di `127.0.0.1:8765` dan dilindungi token.
 7. Agar server tidak mudah dimatikan sistem, izinkan aplikasi berjalan di latar belakang (nonaktifkan optimasi baterai untuk WebForge Mobile). Android tetap berhak menghentikan proses; lihat batasan di bawah.
 
-## Batasan jujur Phase 1
+## Batasan jujur
 
 - **Runtime bahasa belum dibundel.** PHP/PHP-FPM, Nginx, Apache, Caddy, Python (Flask/Django/FastAPI), Node.js/npm, MariaDB, dan PostgreSQL belum tersedia. Proyek dengan stack tersebut bisa dideteksi dan file-nya bisa diedit, tetapi belum bisa dijalankan.
 - **Tanpa root, tanpa port istimewa.** Server hanya bisa memakai port ≥ 1024.

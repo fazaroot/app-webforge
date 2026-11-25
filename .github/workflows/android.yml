@@ -622,6 +622,7 @@ jobs:
             postgres-out/libpostgres.so
             postgres-out/libinitdb.so
             postgres-out/libpgctl.so
+            postgres-out/libpsql.so
             postgres-out/postgres-share.zip
             postgres-out/postgres-version.txt
           if-no-files-found: error
