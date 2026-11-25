@@ -259,6 +259,8 @@ sed -i 's|^#define HAVE_PROC_SELF_EXE 1$|/* #undef HAVE_PROC_SELF_EXE (WebForge:
 # menaut libpq secara statis.
 sed -i 's/^all: all-lib libpq-refs-stamp/all: libpq.a libpq-refs-stamp/' src/interfaces/libpq/Makefile
 sed -i 's/^libpq-refs-stamp: $(shlib)/libpq-refs-stamp: libpq.a/' src/interfaces/libpq/Makefile
+sed -i 's/^all-lib: $(shlib) $(stlib)/all-lib: $(stlib)/' src/interfaces/libpq/Makefile
+rm -f src/interfaces/libpq/libpq.so src/interfaces/libpq/libpq.so.*
 grep -E "HAVE_PROC_SELF_EXE|USE_UNNAMED_POSIX_SEMAPHORES" src/include/pg_config.h || true
 
 # Cek libpq-refs-stamp menolak referensi pthread_exit (sah di Bionic dan
