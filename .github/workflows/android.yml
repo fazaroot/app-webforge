@@ -123,14 +123,13 @@ jobs:
           fi
           NDK="${ANDROID_NDK_HOME:-$NDK_DIR}"
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
-          mkdir -p "$GITHUB_WORKSPACE/toolchain-shim"
-          ln -sf "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang" "$GITHUB_WORKSPACE/toolchain-shim/aarch64-linux-android-clang"
-          ln -sf "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang++" "$GITHUB_WORKSPACE/toolchain-shim/aarch64-linux-android-clang++"
-          echo "$GITHUB_WORKSPACE/toolchain-shim" >> "$GITHUB_PATH"
+          # Wrapper clang NDK adalah skrip yang mencari clang relatif
+          # terhadap lokasinya sendiri, jadi symlink ke direktori lain
+          # rusak. Pakai path absolut wrapper aslinya langsung.
           echo "$TOOLCHAIN/bin" >> "$GITHUB_PATH"
           {
-            echo "CC=aarch64-linux-android-clang"
-            echo "CXX=aarch64-linux-android-clang++"
+            echo "CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang"
+            echo "CXX=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang++"
             echo "AR=llvm-ar"
             echo "RANLIB=llvm-ranlib"
             echo "STRIP=llvm-strip"
