@@ -219,6 +219,9 @@ rm -rf "$SRC/apr-util-${APR_UTIL_VERSION}"
 tar -xzf "$DL/apr-util.tar.gz" -C "$SRC"
 (
   cd "$SRC/apr-util-${APR_UTIL_VERSION}"
+  # APR-util menguji sizeof(void*) dengan AC_TRY_RUN; fallback cross-compile
+  # bawaannya 4 (salah untuk LP64 aarch64). Paksa fallback yang benar.
+  sed -i 's/apu_cv_sizeof_void_p=4/apu_cv_sizeof_void_p=8/g' configure
   ./configure \
     --host=aarch64-linux-android \
     --build=x86_64-linux-gnu \

@@ -72,7 +72,8 @@ verify_elf() {
     exit 1
   fi
   file "$file" || true
-  if ! "$READELF" -h "$file" | grep -q "AArch64"; then
+  if ! "$READELF" -h "$file" | grep -qi "aarch64"; then
+    "$READELF" -h "$file" || true
     echo "$file bukan ELF AArch64" >&2
     exit 1
   fi

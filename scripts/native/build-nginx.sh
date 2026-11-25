@@ -205,6 +205,8 @@ export NGX_CROSS_COMPILE=yes
 # jadi nilai ini praktis tidak terpakai — tetap diisi agar define tidak
 # kosong. Verifikasi di perangkat tetap wajib.
 export NGX_WITH_NGX_SYS_NERR=133
+# Bionic API 26 tidak menyediakan crypt.h; jangan klaim NGX_HAVE_CRYPT.
+export NGX_WITH_NGX_HAVE_CRYPT=0
 
 ./configure \
   --prefix=/webforge/nginx \
@@ -225,6 +227,7 @@ export NGX_WITH_NGX_SYS_NERR=133
   --with-http_realip_module \
   --with-http_gzip_static_module \
   --with-http_stub_status_module \
+  --without-http_auth_basic_module \
   --test-build-epoll
 
 if ! grep -q "NGX_HAVE_EPOLL" objs/ngx_auto_config.h; then

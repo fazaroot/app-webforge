@@ -193,6 +193,8 @@ if [ ! -x "$HOST_ZIC" ]; then
   (
     unset CC CXX AR RANLIB STRIP
     export CC=gcc
+    # GCC host runner default C23; PG 16.3 membutuhkan mode C17.
+    export CFLAGS="-std=gnu17 -O2"
     "$SRC_DIR/postgresql-${PG_VERSION}/configure" --without-readline --without-icu --disable-nls >/dev/null
     make -C src/timezone zic -j"$(nproc)"
   )

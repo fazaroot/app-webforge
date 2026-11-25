@@ -245,7 +245,9 @@ force_static_modules() {
 import pathlib
 import sys
 
-setup = pathlib.Path("Modules/Setup")
+setup = pathlib.Path("Modules/Setup.stdlib")
+if not setup.is_file():
+    setup = pathlib.Path("Modules/Setup")
 local = pathlib.Path("Modules/Setup.local")
 targets = {
     "_ssl", "_hashlib", "_sqlite3", "_ctypes", "_socket", "_json",
@@ -254,7 +256,7 @@ targets = {
 }
 critical = {"_ssl", "_hashlib", "_sqlite3", "_socket", "_zlib"}
 if not setup.is_file():
-    print("Modules/Setup tidak ditemukan setelah configure", file=sys.stderr)
+    print("Modules/Setup.stdlib/Setup tidak ditemukan setelah configure", file=sys.stderr)
     raise SystemExit(1)
 
 moved = []
@@ -274,7 +276,7 @@ for line in setup.read_text().splitlines():
 
 missing_critical = sorted(critical - found)
 if missing_critical:
-    print(f"Modul kritis tidak ada di Modules/Setup: {missing_critical}", file=sys.stderr)
+    print(f"Modul kritis tidak ada di {setup}: {missing_critical}", file=sys.stderr)
     raise SystemExit(1)
 missing = sorted(targets - found)
 if missing:
