@@ -394,7 +394,9 @@ fn spawn_inprocess_supervisor(
                 }
             };
             let app = crate::static_app(doc_root.clone());
-            let serve = axum::serve(listener, app);
+            // axum::serve mengembalikan Serve (IntoFuture, bukan Future);
+            // ubah ke future agar bisa di-pin dan di-select.
+            let serve = std::future::IntoFuture::into_future(axum::serve(listener, app));
             tokio::pin!(serve);
             let mut healthy = false;
             let health_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
