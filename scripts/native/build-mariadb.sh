@@ -191,6 +191,8 @@ if [ ! -f "$HOST_BUILD/import_executables.cmake" ]; then
     export CC=gcc
     export CXX=g++
     cmake -S "$MARIADB_SRC" -B "$HOST_BUILD" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+      -DCMAKE_C_FLAGS="-std=gnu17 -Wno-error=incompatible-pointer-types -Wno-error=implicit-function-declaration" \
+      -DCMAKE_CXX_FLAGS="-Wno-error=incompatible-pointer-types" \
       "${COMMON_CMAKE_ARGS[@]}" \
       -DWITH_SSL=system \
       -DWITH_ZLIB=bundled

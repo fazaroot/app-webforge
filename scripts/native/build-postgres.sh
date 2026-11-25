@@ -251,6 +251,10 @@ export LIBS="-lssl -lcrypto${SHIM_LIBS} -ldl"
 # Runtime memakai argv[0] symlink untuk menemukan share/; /proc/self/exe
 # akan menembus symlink ke nativeLibraryDir dan merusak resolusi itu.
 sed -i 's|^#define HAVE_PROC_SELF_EXE 1$|/* #undef HAVE_PROC_SELF_EXE (WebForge: resolusi argv0) */|' src/include/pg_config.h
+# --disable-shared tidak cukup: libpq.so tetap terbuild dan initdb menautnya
+# dinamis. Paksa enable_shared=no agar tool frontend menaut libpq.a statis.
+sed -i 's/^enable_shared = yes/enable_shared = no/' src/Makefile.global
+grep "^enable_shared" src/Makefile.global
 grep -E "HAVE_PROC_SELF_EXE|USE_UNNAMED_POSIX_SEMAPHORES" src/include/pg_config.h || true
 
 # Cek libpq-refs-stamp menolak referensi pthread_exit (sah di Bionic dan

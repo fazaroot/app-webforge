@@ -233,6 +233,7 @@ cat > "$WORK_DIR/glob_shim.c" <<'EOF'
 #include <fnmatch.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #ifndef GLOB_NOMATCH
 #define GLOB_NOMATCH 3
@@ -300,7 +301,7 @@ void wf_globfree(glob_t *pglob) {
 EOF
 $CC -O2 -fPIC -c "$WORK_DIR/glob_shim.c" -o "$WORK_DIR/glob_shim.o"
 
-./configure \
+if ! ./configure \
   --prefix=/webforge/nginx \
   --sbin-path=/webforge/nginx \
   --conf-path=/webforge/nginx.conf \
@@ -314,14 +315,21 @@ $CC -O2 -fPIC -c "$WORK_DIR/glob_shim.c" -o "$WORK_DIR/glob_shim.o"
   --http-scgi-temp-path=/webforge/scgi_temp \
   --with-cc="$CC" \
   --with-cc-opt="-I$PREFIX/include -O2" \
-  --with-ld-opt="-L$PREFIX/lib $WORK_DIR/glob_shim.o" \
+  --with-ld-opt="-L$PREFIX/lib" \
   --with-threads \
   --with-http_realip_module \
   --with-http_gzip_static_module \
   --with-http_stub_status_module \
   --without-http_auth_basic_module \
-  --test-build-epoll
+  --test-build-epoll; then
+  echo "::error::configure Nginx gagal; isi objs/autoconf.err:"
+  cat objs/autoconf.err || true
+  exit 1
+fi
 
+
+# Tautkan shim glob hanya pada link akhir nginx (bukan uji fitur configure).
+sed -i "s|\$(LINK) -o objs/nginx|\$(LINK) -o objs/nginx $WORK_DIR/glob_shim.o|" objs/Makefile
 
 if ! grep -q "NGX_HAVE_EPOLL" objs/ngx_auto_config.h; then
   echo "::warning::NGX_HAVE_EPOLL tidak terdeteksi; Nginx akan memakai poll/select. Periksa log configure."
