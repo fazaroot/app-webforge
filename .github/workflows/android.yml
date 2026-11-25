@@ -329,6 +329,10 @@ jobs:
             sed -i "s/^#define $sym 1$/\/* #undef $sym *\//" main/php_config.h
           done
           grep -E "HAVE_RES_|HAVE_DN_" main/php_config.h || true
+          # Bionic tidak mendeklarasikan getdtablesize(); PHP memanggilnya
+          # tanpa guard di php_fopen_wrapper.c. Ganti dengan sysconf yang
+          # setara (unistd.h sudah di-include file-file tersebut).
+          grep -rl "getdtablesize()" ext main sapi | xargs sed -i 's/getdtablesize()/sysconf(_SC_OPEN_MAX)/g'
           make -j"$(nproc)"
 
       - name: Package libphp.so
