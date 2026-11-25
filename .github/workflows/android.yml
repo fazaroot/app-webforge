@@ -563,7 +563,7 @@ jobs:
       - name: Build Node.js (nodejs-mobile arm64)
         run: bash scripts/native/build-node.sh
 
-      - name: Repack npm.tgz menjadi npm.zip (root: package/)
+      - name: "Repack npm.tgz menjadi npm.zip (root package/)"
         run: |
           mkdir -p npm-repack
           tar -xzf node-out/npm.tgz -C npm-repack
