@@ -82,7 +82,7 @@ pub fn node_start(args: &[String], cwd: &str, log_path: &str, status_path: &str)
         Ok(e) => e,
         Err(_) => return false,
     };
-    let class = JClass::from(ctx.node_controller.as_obj().clone());
+    let class: &JClass = ctx.node_controller.as_obj().into();
     let instance = match env.get_static_field(&class, "INSTANCE", "Lcom/webforge/mobile/NodeController;") {
         Ok(v) => match v.l() {
             Ok(o) => o,
@@ -143,7 +143,7 @@ pub fn node_stop() -> bool {
         Ok(e) => e,
         Err(_) => return false,
     };
-    let class = JClass::from(ctx.node_controller.as_obj().clone());
+    let class: &JClass = ctx.node_controller.as_obj().into();
     let instance = match env.get_static_field(&class, "INSTANCE", "Lcom/webforge/mobile/NodeController;") {
         Ok(v) => match v.l() {
             Ok(o) => o,
