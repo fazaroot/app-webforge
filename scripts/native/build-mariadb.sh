@@ -203,7 +203,7 @@ fi
 
 # Curses hanya dibutuhkan readline klien; mariadbd tidak membutuhkannya.
 # Longgarkan FIND_CURSES agar configure target tidak gagal tanpa ncurses.
-sed -i 's/FIND_PACKAGE(Curses REQUIRED)/FIND_PACKAGE(Curses)/' "$MARIADB_SRC/cmake/readline.cmake"
+sed -i 's/FIND_PACKAGE(Curses REQUIRED)/FIND_PACKAGE(Curses)\n IF(NOT CURSES_FOUND)\n  SET(CURSES_LIBRARY "")\n ENDIF()/' "$MARIADB_SRC/cmake/readline.cmake"
 sed -i 's/MESSAGE(FATAL_ERROR ${ERRORMSG})/MESSAGE(STATUS "Curses tidak ditemukan; readline klien dinonaktifkan di target Android")/' "$MARIADB_SRC/cmake/readline.cmake"
 
 # --- Target build Android ---

@@ -257,7 +257,7 @@ tar -xzf "$DL/httpd.tar.gz" -C "$SRC"
     --with-mpm=event \
     --enable-mods-static="mime dir log_config authz_core authz_host authn_core authz_user unixd setenvif alias rewrite env headers reqtimeout ssl socache_shmcb watchdog" \
     --enable-mods-shared=none \
-    --disable-htpasswd --disable-htdigest --disable-htdbm \
+    --disable-htpasswd --disable-htdigest --disable-htdbm --disable-ext-filter \
     CC="$CC" CXX="$CXX" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP" \
     "${CROSS_CACHE_VARS[@]}" \
     ac_cv_func_poll=yes

@@ -213,6 +213,16 @@ export NGX_WITH_NGX_HAVE_CRYPT=0
 sed -i 's|#include <crypt.h>|/* crypt.h tidak tersedia di Bionic API 26 */|' src/os/unix/ngx_linux_config.h
 sed -i 's|#include <glob.h>|#include <glob.h>\nint wf_glob(const char *, int, int (*)(const char *, int), glob_t *);\nvoid wf_globfree(glob_t *);|' src/os/unix/ngx_linux_config.h
 sed -i 's|n = glob((char \*) gl->pattern|n = wf_glob((char *) gl->pattern|; s|globfree(&gl->pglob)|wf_globfree(\&gl->pglob)|' src/os/unix/ngx_files.c
+# EPOLLIN/EPOLLOUT Bionic didefinisikan dengan cast (__poll_t) sehingga
+# tidak valid dalam ekspresi preprocessor; ganti #if dengan assignment.
+python3 - <<'PYEOF'
+import pathlib
+f = pathlib.Path("src/event/modules/ngx_epoll_module.c")
+s = f.read_text()
+s = s.replace("#if (NGX_READ_EVENT != EPOLLIN|EPOLLRDHUP)\n        events = EPOLLIN|EPOLLRDHUP;\n#endif", "        events = EPOLLIN|EPOLLRDHUP;")
+s = s.replace("#if (NGX_WRITE_EVENT != EPOLLOUT)\n        events = EPOLLOUT;\n#endif", "        events = EPOLLOUT;")
+f.write_text(s)
+PYEOF
 
 
 # Bionic API 26 tidak menyediakan glob()/globfree() (baru API 28), padahal
