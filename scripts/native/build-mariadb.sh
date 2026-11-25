@@ -266,6 +266,8 @@ cmake -S "$MARIADB_SRC" -B "$TARGET_BUILD" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DCMAKE_CXX_FLAGS="-D_GNU_SOURCE -Dushort=\"unsigned short\" -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types" \
   -DCURSES_LIBRARY="$PREFIX/lib/libncurses.a" \
   -DPCRE2_LIBRARY="$PREFIX/lib/libpcre2-8.a" \
+  -DCMAKE_EXE_LINKER_FLAGS="-L$PREFIX/lib" \
+  -DCMAKE_SHARED_LINKER_FLAGS="-L$PREFIX/lib" \
   -DPCRE2_INCLUDE_DIR="$PREFIX/include" \
   -DCURSES_INCLUDE_PATH="$PREFIX/include" \
   -DIMPORT_EXECUTABLES="$HOST_BUILD/import_executables.cmake" \
