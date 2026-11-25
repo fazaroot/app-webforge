@@ -145,7 +145,7 @@ export function Files() {
                 <div className="flex items-center justify-between gap-2">
                   <button type="button" className="text-left min-w-0" onClick={() => { if (entry.is_dir) setPath(entry.path); else void openPreview(entry); }}>
                     <p className="text-sm font-medium truncate">{entry.is_dir ? <Folder size={14} className="inline mr-1 text-primary" /> : <File size={14} className="inline mr-1" />}{entry.name}</p>
-                    <p className="text-xs text-slate-500">{entry.is_dir ? 'Folder' : formatBytes(entry.size)} · {formatDateTime(entry.modified_at)}</p>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">{entry.is_dir ? 'Folder' : formatBytes(entry.size)} · {formatDateTime(entry.modified_at)}</p>
                   </button>
                   <div className="flex gap-1 shrink-0">
                     <button type="button" className="p-1.5" title="Ganti nama" onClick={() => setAction({ entry, kind: 'rename', target: entry.path })}><Pencil size={15} /></button>
@@ -181,7 +181,7 @@ export function Files() {
           <pre className="text-xs font-mono whitespace-pre-wrap max-h-80 overflow-auto rounded-lg bg-slate-50 dark:bg-darkbg p-3">{preview.content}</pre>
         </Card>
       )}
-      <p className="text-xs text-slate-500">Upload menulis file teks lewat API tulis file; file biner tidak didukung untuk pratinjau/edit (API menolak file biner).</p>
+      <p className="text-xs text-slate-600 dark:text-slate-400">Upload menulis file teks lewat API tulis file; file biner tidak didukung untuk pratinjau/edit (API menolak file biner).</p>
     </div>
   );
 }

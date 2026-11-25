@@ -89,12 +89,12 @@ export function Terminal() {
       <Card title="Terminal">
         <div className="space-y-2">
           <ProjectPicker />
-          <p className="text-xs text-slate-500">Perintah dijalankan dengan sh -c di folder proyek aktif (atau workspace bila belum dipilih), timeout 30 detik.
+          <p className="text-xs text-slate-600 dark:text-slate-400">Perintah dijalankan dengan sh -c di folder proyek aktif (atau workspace bila belum dipilih), timeout 30 detik.
             {transport && <> Transport terakhir: {transport === 'ws' ? 'WebSocket' : 'HTTP'}.</>}</p>
           <div ref={outputRef} className="rounded-lg bg-[#0D1117] text-slate-100 p-3 h-64 overflow-auto font-mono text-xs whitespace-pre-wrap">
-            {lines.length === 0 ? <span className="text-slate-500">Belum ada keluaran. Ketik perintah di bawah.</span> :
+            {lines.length === 0 ? <span className="text-slate-600 dark:text-slate-400">Belum ada keluaran. Ketik perintah di bawah.</span> :
               lines.map((l, i) => (
-                <div key={i} className={l.kind === 'cmd' ? 'text-emerald-300' : l.kind === 'err' ? 'text-red-300' : l.kind === 'info' ? 'text-slate-400' : ''}>{l.text}</div>
+                <div key={i} className={l.kind === 'cmd' ? 'text-emerald-300' : l.kind === 'err' ? 'text-red-300' : l.kind === 'info' ? 'text-slate-600 dark:text-slate-400' : ''}>{l.text}</div>
               ))}
           </div>
           <div className="flex gap-2">
@@ -117,7 +117,7 @@ export function Terminal() {
             {history.data!.map((h) => (
               <button key={h.id} type="button" className="w-full text-left rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2" onClick={() => setCommand(h.command)}>
                 <p className="font-mono text-xs break-all">{h.command}</p>
-                <p className="text-xs text-slate-500">exit {h.exit_code} · {formatDateTime(h.created_at)}</p>
+                <p className="text-xs text-slate-600 dark:text-slate-400">exit {h.exit_code} · {formatDateTime(h.created_at)}</p>
               </button>
             ))}
           </div>

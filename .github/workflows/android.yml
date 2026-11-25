@@ -374,9 +374,303 @@ jobs:
           path: php-out/libphp.so
           if-no-files-found: error
 
+  build-caddy:
+    name: Caddy (Android arm64)
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_API: "26"
+      OUTPUT_DIR: ${{ github.workspace }}/caddy-out
+      OUT_DIR: ${{ github.workspace }}/caddy-out
+      WORK_DIR: ${{ github.workspace }}/native-work/caddy
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Cache Caddy (Android arm64) build
+        uses: actions/cache@v4
+        with:
+          path: native-work/caddy
+          key: build-caddy-${{ hashFiles('scripts/native/build-caddy.sh') }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Build Caddy (Android arm64)
+        run: bash scripts/native/build-caddy.sh
+
+      - name: Upload Caddy (Android arm64) artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: caddy-android-arm64
+          path: |
+            caddy-out/libcaddy.so
+          if-no-files-found: error
+  build-nginx:
+    name: Nginx (Android arm64)
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_API: "26"
+      OUTPUT_DIR: ${{ github.workspace }}/nginx-out
+      OUT_DIR: ${{ github.workspace }}/nginx-out
+      WORK_DIR: ${{ github.workspace }}/native-work/nginx
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Locate Android NDK
+        run: |
+          if [ -z "$ANDROID_NDK_HOME" ]; then
+            NDK_DIR=$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)
+            if [ -z "$NDK_DIR" ]; then
+              echo "::error::Android NDK tidak ditemukan di $ANDROID_HOME/ndk"
+              exit 1
+            fi
+            echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          fi
+          echo "NDK: ${ANDROID_NDK_HOME:-$NDK_DIR}"
+
+      - name: Cache Nginx (Android arm64) build
+        uses: actions/cache@v4
+        with:
+          path: native-work/nginx
+          key: build-nginx-${{ hashFiles('scripts/native/build-nginx.sh') }}
+
+      - name: Build Nginx (Android arm64)
+        run: bash scripts/native/build-nginx.sh
+
+      - name: Upload Nginx (Android arm64) artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nginx-android-arm64
+          path: |
+            nginx-out/libnginx.so
+          if-no-files-found: error
+  build-apache:
+    name: Apache httpd (Android arm64)
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_API: "26"
+      OUTPUT_DIR: ${{ github.workspace }}/apache-out
+      OUT_DIR: ${{ github.workspace }}/apache-out
+      WORK_DIR: ${{ github.workspace }}/native-work/apache
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Locate Android NDK
+        run: |
+          if [ -z "$ANDROID_NDK_HOME" ]; then
+            NDK_DIR=$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)
+            if [ -z "$NDK_DIR" ]; then
+              echo "::error::Android NDK tidak ditemukan di $ANDROID_HOME/ndk"
+              exit 1
+            fi
+            echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          fi
+          echo "NDK: ${ANDROID_NDK_HOME:-$NDK_DIR}"
+
+      - name: Cache Apache httpd (Android arm64) build
+        uses: actions/cache@v4
+        with:
+          path: native-work/apache
+          key: build-apache-${{ hashFiles('scripts/native/build-apache.sh') }}
+
+      - name: Build Apache httpd (Android arm64)
+        run: bash scripts/native/build-apache.sh
+
+      - name: Upload Apache httpd (Android arm64) artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apache-android-arm64
+          path: |
+            apache-out/libhttpd.so
+          if-no-files-found: error
+  build-python:
+    name: Python 3.12 (Android arm64)
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_API: "26"
+      OUTPUT_DIR: ${{ github.workspace }}/python-out
+      OUT_DIR: ${{ github.workspace }}/python-out
+      WORK_DIR: ${{ github.workspace }}/python-build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Locate Android NDK
+        run: |
+          if [ -z "$ANDROID_NDK_HOME" ]; then
+            NDK_DIR=$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)
+            if [ -z "$NDK_DIR" ]; then
+              echo "::error::Android NDK tidak ditemukan di $ANDROID_HOME/ndk"
+              exit 1
+            fi
+            echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          fi
+          echo "NDK: ${ANDROID_NDK_HOME:-$NDK_DIR}"
+
+      - name: Cache Python 3.12 (Android arm64) build
+        uses: actions/cache@v4
+        with:
+          path: python-build
+          key: build-python-${{ hashFiles('scripts/native/build-python.sh') }}
+
+      - name: Build Python 3.12 (Android arm64)
+        run: bash scripts/native/build-python.sh
+
+      - name: Upload Python 3.12 (Android arm64) artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-android-arm64
+          path: |
+            python-out/libpython.so
+            python-out/python-stdlib.zip
+            python-out/python-version.txt
+          if-no-files-found: error
+  build-node:
+    name: Node.js (nodejs-mobile arm64)
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_API: "26"
+      OUTPUT_DIR: ${{ github.workspace }}/node-out
+      OUT_DIR: ${{ github.workspace }}/node-out
+      WORK_DIR: ${{ github.workspace }}/node-build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Locate Android NDK
+        run: |
+          if [ -z "$ANDROID_NDK_HOME" ]; then
+            NDK_DIR=$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)
+            if [ -z "$NDK_DIR" ]; then
+              echo "::error::Android NDK tidak ditemukan di $ANDROID_HOME/ndk"
+              exit 1
+            fi
+            echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          fi
+          echo "NDK: ${ANDROID_NDK_HOME:-$NDK_DIR}"
+
+      - name: Cache Node.js (nodejs-mobile arm64) build
+        uses: actions/cache@v4
+        with:
+          path: node-build
+          key: build-node-${{ hashFiles('scripts/native/build-node.sh') }}
+
+
+      - name: Build Node.js (nodejs-mobile arm64)
+        run: bash scripts/native/build-node.sh
+
+      - name: Repack npm.tgz menjadi npm.zip (root: package/)
+        run: |
+          mkdir -p npm-repack
+          tar -xzf node-out/npm.tgz -C npm-repack
+          test -f npm-repack/package/bin/npm-cli.js
+          (cd npm-repack && zip -qr ../node-out/npm.zip package)
+          ls -lh node-out/npm.zip
+
+      - name: Upload Node.js (nodejs-mobile arm64) artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-android-arm64
+          path: |
+            node-out/libnode.so
+            node-out/libwebforge_node.so
+            node-out/npm.zip
+            node-out/node-version.txt
+          if-no-files-found: error
+  build-postgres:
+    name: PostgreSQL 16 (Android arm64)
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_API: "26"
+      OUTPUT_DIR: ${{ github.workspace }}/postgres-out
+      OUT_DIR: ${{ github.workspace }}/postgres-out
+      WORK_DIR: ${{ github.workspace }}/db-build/postgres
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Locate Android NDK
+        run: |
+          if [ -z "$ANDROID_NDK_HOME" ]; then
+            NDK_DIR=$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)
+            if [ -z "$NDK_DIR" ]; then
+              echo "::error::Android NDK tidak ditemukan di $ANDROID_HOME/ndk"
+              exit 1
+            fi
+            echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          fi
+          echo "NDK: ${ANDROID_NDK_HOME:-$NDK_DIR}"
+
+      - name: Cache PostgreSQL 16 (Android arm64) build
+        uses: actions/cache@v4
+        with:
+          path: db-build/postgres
+          key: build-postgres-${{ hashFiles('scripts/native/build-postgres.sh') }}
+
+      - name: Build PostgreSQL 16 (Android arm64)
+        run: bash scripts/native/build-postgres.sh
+
+      - name: Upload PostgreSQL 16 (Android arm64) artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-android-arm64
+          path: |
+            postgres-out/libpostgres.so
+            postgres-out/libinitdb.so
+            postgres-out/libpgctl.so
+            postgres-out/postgres-share.zip
+            postgres-out/postgres-version.txt
+          if-no-files-found: error
+  build-mariadb:
+    name: MariaDB 10.11 (Android arm64)
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_API: "26"
+      OUTPUT_DIR: ${{ github.workspace }}/mariadb-out
+      OUT_DIR: ${{ github.workspace }}/mariadb-out
+      WORK_DIR: ${{ github.workspace }}/db-build/mariadb
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Locate Android NDK
+        run: |
+          if [ -z "$ANDROID_NDK_HOME" ]; then
+            NDK_DIR=$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)
+            if [ -z "$NDK_DIR" ]; then
+              echo "::error::Android NDK tidak ditemukan di $ANDROID_HOME/ndk"
+              exit 1
+            fi
+            echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          fi
+          echo "NDK: ${ANDROID_NDK_HOME:-$NDK_DIR}"
+
+      - name: Cache MariaDB 10.11 (Android arm64) build
+        uses: actions/cache@v4
+        with:
+          path: db-build/mariadb
+          key: build-mariadb-${{ hashFiles('scripts/native/build-mariadb.sh') }}
+
+      - name: Build MariaDB 10.11 (Android arm64)
+        run: bash scripts/native/build-mariadb.sh
+
+      - name: Upload MariaDB 10.11 (Android arm64) artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mariadb-android-arm64
+          path: |
+            mariadb-out/libmariadbd.so
+            mariadb-out/mariadb-share.zip
+            mariadb-out/mariadb-version.txt
+          if-no-files-found: error
+
   android:
     name: Android APK (debug)
-    needs: [core, frontend, build-php]
+    needs: [core, frontend, build-php, build-caddy, build-nginx, build-apache, build-python, build-node, build-postgres, build-mariadb]
     runs-on: ubuntu-latest
     env:
       CARGO_BUILD_JOBS: 2
@@ -479,6 +773,45 @@ jobs:
       - name: Capacitor sync
         run: npx cap sync android
 
+
+      - name: Download runtime binaries (jniLibs)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-android-arm64"
+          path: runtime-artifacts
+          merge-multiple: false
+
+      - name: Place runtime binaries and assets
+        run: |
+          JNILIBS=android/app/src/main/jniLibs/arm64-v8a
+          ASSETS=android/app/src/main/assets
+          mkdir -p "$JNILIBS" "$ASSETS"
+          for so in libcaddy.so libnginx.so libhttpd.so libpython.so libnode.so libwebforge_node.so libpostgres.so libinitdb.so libpgctl.so libmariadbd.so; do
+            SRC=$(find runtime-artifacts -name "$so" | head -1)
+            if [ -z "$SRC" ]; then
+              echo "::error::$so tidak ditemukan di artifact runtime"
+              exit 1
+            fi
+            cp "$SRC" "$JNILIBS/$so"
+            if ! readelf -h "$JNILIBS/$so" | grep -q "AArch64"; then
+              echo "::error::$so bukan ELF AArch64"
+              exit 1
+            fi
+            ls -lh "$JNILIBS/$so"
+          done
+          # libpsql.so opsional (bila terbuild)
+          SRC=$(find runtime-artifacts -name "libpsql.so" | head -1)
+          if [ -n "$SRC" ]; then cp "$SRC" "$JNILIBS/libpsql.so"; fi
+          for asset in python-stdlib.zip python-version.txt node-version.txt npm.zip postgres-share.zip mariadb-share.zip; do
+            SRC=$(find runtime-artifacts -name "$asset" | head -1)
+            if [ -z "$SRC" ]; then
+              echo "::error::Asset $asset tidak ditemukan di artifact runtime"
+              exit 1
+            fi
+            cp "$SRC" "$ASSETS/$asset"
+            ls -lh "$ASSETS/$asset"
+          done
+
       - name: Build debug APK
         working-directory: android
         run: |
@@ -498,7 +831,7 @@ jobs:
             echo "::error::APK terlalu kecil ($SIZE bytes), diduga build rusak"
             exit 1
           fi
-          for entry in AndroidManifest.xml classes.dex lib/arm64-v8a/libwebforge_core.so lib/arm64-v8a/libphp.so; do
+          for entry in AndroidManifest.xml classes.dex lib/arm64-v8a/libwebforge_core.so lib/arm64-v8a/libphp.so lib/arm64-v8a/libcaddy.so lib/arm64-v8a/libnginx.so lib/arm64-v8a/libhttpd.so lib/arm64-v8a/libpython.so lib/arm64-v8a/libnode.so lib/arm64-v8a/libwebforge_node.so lib/arm64-v8a/libpostgres.so lib/arm64-v8a/libinitdb.so lib/arm64-v8a/libpgctl.so lib/arm64-v8a/libmariadbd.so assets/python-stdlib.zip assets/python-version.txt assets/node-version.txt assets/npm.zip assets/postgres-share.zip assets/mariadb-share.zip; do
             if ! unzip -l "$APK" | grep -q "$entry"; then
               echo "::error::APK tidak berisi $entry"
               exit 1

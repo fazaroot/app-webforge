@@ -1,10 +1,10 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import type {
-  BackupResult, DatabaseInfo, Diagnostics, DirSize, FileEntry, FileRead, FileSearchHit,
+  ActionOutput, BackupResult, CreateDatabaseBody, CreateServerBody, DatabaseInfo, Diagnostics, DirSize, FileEntry, FileRead, FileSearchHit,
   FrameworkInfo, GitStatus, Health, LogEntry, MonitoringCurrent, MonitoringPoint, NetworkInfo,
-  PhpCliResult, PhpRuntimeInfo, PhpSettings, PowerStatus,
-  Project, QueryResult, RuntimeInfo, SecurityStatus, ServerInstance, ServerLog, SettingsMap,
-  SystemInfo, TableInfo, TerminalHistoryItem, TerminalResult,
+  NodeProjectInfo, PhpCliResult, PhpRuntimeInfo, PhpSettings, PowerStatus, PythonProjectInfo, PythonRuntimeInfo,
+  Project, QueryResult, RuntimeInfo, SecurityStatus, ServerConfig, ServerInstance, ServerLog, SettingsMap,
+  SystemInfo, TableInfo, TerminalHistoryItem, TerminalResult, TestConnectionResult, ValidateConfigResult,
 } from './types';
 
 export interface PickDirectoryResult {
@@ -184,13 +184,29 @@ export const api = {
   scanProject: (id: string) => request<FrameworkInfo>(`/api/projects/${id}/scan`, { method: 'POST' }),
 
   servers: () => request<ServerInstance[]>('/api/servers'),
-  createServer: (body: { project_id: string; engine: string; port: number; bind_lan: boolean; document_root?: string }) =>
+  createServer: (body: CreateServerBody) =>
     request<ServerInstance>('/api/servers', { method: 'POST', body: JSON.stringify(body) }),
   deleteServer: (id: string) => request<{ ok: boolean }>(`/api/servers/${id}`, { method: 'DELETE' }),
   startServer: (id: string) => request<ServerInstance>(`/api/servers/${id}/start`, { method: 'POST' }),
   stopServer: (id: string) => request<ServerInstance>(`/api/servers/${id}/stop`, { method: 'POST' }),
   restartServer: (id: string) => request<ServerInstance>(`/api/servers/${id}/restart`, { method: 'POST' }),
+  reloadServer: (id: string) => request<ServerInstance>(`/api/servers/${id}/reload`, { method: 'POST' }),
   serverLogs: (id: string, limit = 200) => request<ServerLog[]>(`/api/servers/${id}/logs${qs({ limit })}`),
+  serverConfig: (id: string) => request<ServerConfig>(`/api/servers/${id}/config`),
+  putServerConfig: (id: string, configText: string) =>
+    request<{ ok: boolean }>(`/api/servers/${id}/config`, { method: 'PUT', body: JSON.stringify({ config_text: configText }) }),
+  validateServerConfig: (id: string, configText?: string) =>
+    request<ValidateConfigResult>(`/api/servers/${id}/validate-config`, { method: 'POST', body: JSON.stringify({ config_text: configText }) }),
+
+  pythonInfo: () => request<PythonRuntimeInfo>('/api/runtimes/python/info'),
+  projectPython: (projectId: string) => request<PythonProjectInfo>(`/api/projects/${projectId}/python`),
+  createPythonVenv: (projectId: string) =>
+    request<ActionOutput>(`/api/projects/${projectId}/python/venv`, { method: 'POST' }),
+  installPythonDeps: (projectId: string) =>
+    request<ActionOutput>(`/api/projects/${projectId}/python/install`, { method: 'POST' }),
+  projectNode: (projectId: string) => request<NodeProjectInfo>(`/api/projects/${projectId}/node`),
+  installNodeDeps: (projectId: string) =>
+    request<ActionOutput>(`/api/projects/${projectId}/node/install`, { method: 'POST' }),
 
   filesList: (projectId: string, path = '') => request<FileEntry[]>(`/api/files/list${qs({ project_id: projectId, path })}`),
   filesRead: (projectId: string, path: string) => request<FileRead>(`/api/files/read${qs({ project_id: projectId, path })}`),
@@ -210,7 +226,11 @@ export const api = {
   filesDirSize: (projectId: string, path: string) => request<DirSize>(`/api/files/dir-size${qs({ project_id: projectId, path })}`),
 
   databases: () => request<DatabaseInfo[]>('/api/databases'),
-  createDatabase: (name: string) => request<DatabaseInfo>('/api/databases', { method: 'POST', body: JSON.stringify({ name }) }),
+  createDatabase: (body: CreateDatabaseBody) => request<DatabaseInfo>('/api/databases', { method: 'POST', body: JSON.stringify(body) }),
+  testDatabaseConnection: (body: CreateDatabaseBody) =>
+    request<TestConnectionResult>('/api/databases/test-connection', { method: 'POST', body: JSON.stringify(body) }),
+  startDatabase: (id: string) => request<DatabaseInfo>(`/api/databases/${id}/start`, { method: 'POST' }),
+  stopDatabase: (id: string) => request<DatabaseInfo>(`/api/databases/${id}/stop`, { method: 'POST' }),
   deleteDatabase: (id: string) => request<{ ok: boolean }>(`/api/databases/${id}`, { method: 'DELETE' }),
   dbTables: (id: string) => request<TableInfo[]>(`/api/databases/${id}/tables`),
   dbQuery: (id: string, sql: string) => request<QueryResult>(`/api/databases/${id}/query`, { method: 'POST', body: JSON.stringify({ sql }) }),

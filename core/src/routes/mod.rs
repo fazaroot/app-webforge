@@ -2,6 +2,7 @@ pub mod databases;
 pub mod files;
 pub mod php;
 pub mod projects;
+pub mod runtimes;
 pub mod servers;
 pub mod system;
 pub mod terminal;
@@ -73,6 +74,15 @@ pub fn router(state: AppState) -> Router {
         .route("/api/servers/:id/stop", post(servers::stop))
         .route("/api/servers/:id/restart", post(servers::restart))
         .route("/api/servers/:id/logs", get(servers::server_logs))
+        .route("/api/servers/:id/config", get(servers::get_config).put(servers::put_config))
+        .route("/api/servers/:id/validate-config", post(servers::validate_config))
+        .route("/api/servers/:id/reload", post(servers::reload_server))
+        .route("/api/runtimes/python/info", get(runtimes::python_info))
+        .route("/api/projects/:id/python", get(runtimes::project_python))
+        .route("/api/projects/:id/python/venv", post(runtimes::create_python_venv))
+        .route("/api/projects/:id/python/install", post(runtimes::install_python_deps))
+        .route("/api/projects/:id/node", get(runtimes::project_node))
+        .route("/api/projects/:id/node/install", post(runtimes::install_node_deps))
         .route("/api/files/list", get(files::list_files))
         .route("/api/files/read", get(files::read_file))
         .route("/api/files/write", post(files::write_file))
@@ -84,7 +94,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/files/search", get(files::search_files))
         .route("/api/files/dir-size", get(files::dir_size))
         .route("/api/databases", get(databases::list_databases).post(databases::create_database))
+        .route("/api/databases/test-connection", post(databases::test_connection))
         .route("/api/databases/:id", delete(databases::delete_database))
+        .route("/api/databases/:id/start", post(databases::start_database))
+        .route("/api/databases/:id/stop", post(databases::stop_database))
         .route("/api/databases/:id/tables", get(databases::list_tables))
         .route("/api/databases/:id/query", post(databases::run_query))
         .route("/api/databases/:id/backup", post(databases::backup_database))

@@ -4,7 +4,7 @@ import { FolderOpen, FolderPlus, RefreshCw, Trash2 } from 'lucide-react';
 import { api, isNativeWebForge, pickDirectory } from '../lib/api';
 import type { Project } from '../lib/types';
 import { formatDateTime } from '../lib/format';
-import { Card, EmptyBox, ErrorBox, LoadingBox, btnDanger, btnGhost, btnPrimary, inputCls } from '../components/ui';
+import { Card, EmptyBox, ErrorBox, SkeletonRows, btnDanger, btnGhost, btnPrimary, inputCls } from '../components/ui';
 import { PhpReadiness } from '../components/PhpManager';
 import { useAppStore } from '../store';
 
@@ -104,7 +104,7 @@ export function Projects() {
       </Card>
 
       <Card title="Daftar proyek">
-        {projects.isLoading ? <LoadingBox /> : projects.isError ? <ErrorBox message="Gagal memuat proyek." /> : (projects.data?.length ?? 0) === 0 ? (
+        {projects.isLoading ? <SkeletonRows rows={3} /> : projects.isError ? <ErrorBox message="Gagal memuat proyek." /> : (projects.data?.length ?? 0) === 0 ? (
           <EmptyBox message="Belum ada proyek. Buat dari template atau daftarkan folder di atas." />
         ) : (
           <div className="space-y-2">
@@ -112,8 +112,8 @@ export function Projects() {
               <button key={p.id} type="button" onClick={() => { setSelected(p); setActiveProjectId(p.id); }}
                 className={`w-full text-left rounded-lg border px-3 py-2 ${activeProjectId === p.id ? 'border-primary' : 'border-slate-200 dark:border-slate-700'}`}>
                 <p className="font-medium text-sm">{p.name}</p>
-                <p className="text-xs text-slate-500 dark:text-slate-400 break-all">{p.path}</p>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
+                <p className="text-xs text-slate-600 dark:text-slate-400 break-all">{p.path}</p>
+                <p className="text-xs text-slate-600 dark:text-slate-400">
                   {p.framework ? `${p.framework.framework} · ${readinessLabel(p.framework.readiness)}` : 'Belum di-scan'}
                 </p>
               </button>
@@ -125,21 +125,21 @@ export function Projects() {
       {selected && (
         <Card title={`Detail: ${selected.name}`}>
           <dl className="text-sm space-y-1">
-            <div><dt className="text-xs text-slate-500">Slug</dt><dd>{selected.slug}</dd></div>
-            <div><dt className="text-xs text-slate-500">Path</dt><dd className="break-all">{selected.path}</dd></div>
-            <div><dt className="text-xs text-slate-500">Document root</dt><dd className="break-all">{selected.document_root}</dd></div>
-            <div><dt className="text-xs text-slate-500">Dibuat</dt><dd>{formatDateTime(selected.created_at)}</dd></div>
+            <div><dt className="text-xs text-slate-600 dark:text-slate-400">Slug</dt><dd>{selected.slug}</dd></div>
+            <div><dt className="text-xs text-slate-600 dark:text-slate-400">Path</dt><dd className="break-all">{selected.path}</dd></div>
+            <div><dt className="text-xs text-slate-600 dark:text-slate-400">Document root</dt><dd className="break-all">{selected.document_root}</dd></div>
+            <div><dt className="text-xs text-slate-600 dark:text-slate-400">Dibuat</dt><dd>{formatDateTime(selected.created_at)}</dd></div>
           </dl>
           {selected.framework ? (
             <div className="mt-3 rounded-lg bg-slate-50 dark:bg-darkbg p-3 text-sm space-y-1">
-              <p><span className="text-slate-500">Framework:</span> {selected.framework.framework} ({selected.framework.language}{selected.framework.version ? ` ${selected.framework.version}` : ''})</p>
-              <p><span className="text-slate-500">Runtime disarankan:</span> {selected.framework.recommended_runtime}</p>
-              <p><span className="text-slate-500">Document root disarankan:</span> {selected.framework.recommended_document_root}</p>
-              <p><span className="text-slate-500">Kesiapan:</span> {readinessLabel(selected.framework.readiness)}</p>
-              {selected.framework.detected_files.length > 0 && <p><span className="text-slate-500">File terdeteksi:</span> {selected.framework.detected_files.join(', ')}</p>}
+              <p><span className="text-slate-600 dark:text-slate-400">Framework:</span> {selected.framework.framework} ({selected.framework.language}{selected.framework.version ? ` ${selected.framework.version}` : ''})</p>
+              <p><span className="text-slate-600 dark:text-slate-400">Runtime disarankan:</span> {selected.framework.recommended_runtime}</p>
+              <p><span className="text-slate-600 dark:text-slate-400">Document root disarankan:</span> {selected.framework.recommended_document_root}</p>
+              <p><span className="text-slate-600 dark:text-slate-400">Kesiapan:</span> {readinessLabel(selected.framework.readiness)}</p>
+              {selected.framework.detected_files.length > 0 && <p><span className="text-slate-600 dark:text-slate-400">File terdeteksi:</span> {selected.framework.detected_files.join(', ')}</p>}
               {selected.framework.notes.map((n) => <p key={n} className="text-warning text-xs">{n}</p>)}
             </div>
-          ) : <p className="text-sm text-slate-500 mt-2">Framework belum terdeteksi. Jalankan scan.</p>}
+          ) : <p className="text-sm text-slate-600 dark:text-slate-400 mt-2">Framework belum terdeteksi. Jalankan scan.</p>}
           <PhpReadiness project={selected} />
           <div className="flex flex-wrap gap-2 mt-3">
             <button type="button" className={btnGhost} disabled={scan.isPending} onClick={() => scan.mutate(selected.id)}>

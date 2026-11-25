@@ -35,6 +35,14 @@
                 android:value="Local development web server running on-device at the user's request" />
         </service>
 
+        <!-- Node.js (nodejs-mobile) berjalan di proses terpisah :node
+             karena node::Start tidak bisa dipanggil ulang dalam proses
+             yang sama; stop membunuh proses ini. -->
+        <service
+            android:name=".NodeService"
+            android:exported="false"
+            android:process=":node" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

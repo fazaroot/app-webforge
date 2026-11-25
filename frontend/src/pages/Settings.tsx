@@ -134,7 +134,7 @@ export function Settings() {
 
       <Card title="Tampilan">
         <label className="block text-sm">
-          <span className="text-xs font-medium text-slate-500">Tema</span>
+          <span className="text-xs font-medium text-slate-600 dark:text-slate-400">Tema</span>
           <select className={inputCls} value={theme} onChange={(e) => setTheme(e.target.value as ThemeMode)}>
             <option value="system">Ikuti sistem</option>
             <option value="light">Terang</option>
@@ -154,14 +154,14 @@ export function Settings() {
 
       <Card title="Latar belakang & baterai">
         {!native ? (
-          <p className="text-sm text-slate-500 dark:text-slate-400">
+          <p className="text-sm text-slate-600 dark:text-slate-400">
             Pengaturan anti-stuck (WakeLock CPU dan pengecualian optimasi baterai) hanya tersedia di
             aplikasi Android. Di browser, server tidak berjalan di perangkat ini sehingga pengaturan
             ini tidak berlaku.
           </p>
         ) : (
           <div className="space-y-3">
-            <p className="text-xs text-slate-500 dark:text-slate-400">
+            <p className="text-xs text-slate-600 dark:text-slate-400">
               Server berjalan lewat layanan latar depan Android. Saat layar mati, CPU perangkat bisa
               tidur sehingga server terasa stuck sampai aplikasi dibuka lagi. WakeLock menjaga CPU
               tetap bangun selama server berjalan, dan pengecualian optimasi baterai mencegah Android
@@ -200,7 +200,7 @@ export function Settings() {
       </Card>
 
       <Card title="Koneksi Core (pengembangan)">
-        <p className="text-xs text-slate-500 mb-2">
+        <p className="text-xs text-slate-600 dark:text-slate-400 mb-2">
           Di aplikasi Android, alamat dan token diambil otomatis dari Core lewat plugin native.
           Isian ini hanya untuk pengembangan di browser.
         </p>

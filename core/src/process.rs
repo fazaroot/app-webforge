@@ -16,6 +16,9 @@ pub struct ServerRow {
     pub bind_lan: bool,
     pub document_root: String,
     pub status: String,
+    pub config_text: Option<String>,
+    pub proxy_port: Option<i64>,
+    pub command: Option<String>,
 }
 
 /// Spesifikasi proses anak yang bisa diluncurkan ulang oleh watcher
@@ -469,11 +472,102 @@ fn spawn_inprocess_supervisor(
     handle.abort_handle()
 }
 
+
+fn engine_health_timeout(engine: &str) -> Duration {
+    match engine {
+        "python" | "node" => Duration::from_secs(25),
+        "caddy" | "nginx" | "apache" => Duration::from_secs(10),
+        _ => Duration::from_secs(5),
+    }
+}
+
+fn find_engine_binary(state: &AppState, engine: &str) -> Option<PathBuf> {
+    let dir = state.native_lib_dir.as_deref();
+    match engine {
+        "php" => php::find_php_binary(dir),
+        "caddy" => crate::runtime::find_runtime_binary(dir, "libcaddy.so", &["caddy"]).map(|(p, _)| p),
+        "nginx" => crate::runtime::find_runtime_binary(dir, "libnginx.so", &["nginx"]).map(|(p, _)| p),
+        "apache" => crate::runtime::find_runtime_binary(dir, "libhttpd.so", &["httpd", "apache2"]).map(|(p, _)| p),
+        "python" => crate::python_runtime::find_python_binary(dir),
+        "node" => crate::runtime::find_in_path("node"),
+        _ => None,
+    }
+}
+
+async fn fail_start(state: &AppState, server: &ServerRow, msg: String) -> String {
+    release_port(&state.pool, &server.id).await;
+    set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
+    app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
+    msg
+}
+
+async fn launch_and_finish(
+    state: &AppState,
+    server: &ServerRow,
+    launch: ChildLaunch,
+) -> Result<(), String> {
+    let (pid, child_arc) = match launch_child(state, server, &launch).await {
+        Ok(v) => v,
+        Err(msg) => return Err(fail_start(state, server, msg).await),
+    };
+    spawn_child_watcher(state.clone(), server.clone(), launch, child_arc);
+    finish_start(state, server, pid, false).await
+}
+
+/// Jalankan validasi konfigurasi web server dengan binary sungguhan.
+/// Mengembalikan (valid, output gabungan stdout+stderr).
+pub async fn validate_webserver_config(
+    state: &AppState,
+    server: &ServerRow,
+    project_path: &str,
+    config_override: Option<&str>,
+) -> Result<(bool, String), String> {
+    let engine = server.engine.as_str();
+    if !matches!(engine, "caddy" | "nginx" | "apache") {
+        return Err(format!("Engine {} tidak memiliki konfigurasi yang dapat divalidasi", engine));
+    }
+    let binary = find_engine_binary(state, engine)
+        .ok_or_else(|| format!("Runtime {} tidak tersedia", engine))?;
+    let doc_root = crate::util::resolve_inside(&PathBuf::from(project_path), &server.document_root, true)
+        .map_err(|e| e.message)?;
+    let input = crate::webservers::WebServerInput {
+        host: if server.bind_lan { "0.0.0.0".to_string() } else { "127.0.0.1".to_string() },
+        port: server.port as u16,
+        doc_root,
+        project_path: PathBuf::from(project_path),
+        data_dir: state.config.data_dir.clone(),
+        server_id: server.id.clone(),
+        proxy_port: server.proxy_port.and_then(|p| u16::try_from(p).ok()),
+        custom_config: config_override.map(|s| s.to_string()).or_else(|| server.config_text.clone()),
+    };
+    let config_path = crate::webservers::write_config(&input, engine)
+        .map_err(|e| format!("Gagal menulis konfigurasi: {}", e))?;
+    let home = crate::webservers::server_home(&state.config.data_dir, &server.id, engine);
+    let args = crate::webservers::validate_args(engine, &config_path, &home);
+    let out = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::process::Command::new(&binary)
+            .args(&args)
+            .current_dir(&home)
+            .env("HOME", &home)
+            .env("TMPDIR", home.join("tmp"))
+            .output(),
+    )
+    .await
+    .map_err(|_| "Validasi konfigurasi timeout".to_string())?
+    .map_err(|e| format!("Gagal menjalankan validasi: {}", e))?;
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Ok((out.status.success(), output.trim().to_string()))
+}
+
 pub async fn start_server(state: &AppState, server: &ServerRow, project_path: &str) -> Result<(), String> {
     let port_u16: u16 = server.port.try_into().map_err(|_| "Port tidak valid".to_string())?;
     let host = if server.bind_lan { "0.0.0.0" } else { "127.0.0.1" };
 
-    // Resolve document root inside project
     let doc_root = crate::util::resolve_inside(
         &PathBuf::from(project_path),
         &server.document_root,
@@ -486,13 +580,38 @@ pub async fn start_server(state: &AppState, server: &ServerRow, project_path: &s
         return Err(msg);
     }
 
-    // Validasi engine sebelum mengalokasikan port.
-    let php_binary = match server.engine.as_str() {
+    // Validasi engine + ketersediaan binary sebelum mengalokasikan port.
+    let engine = server.engine.as_str();
+    let binary: Option<PathBuf> = match engine {
         "static" => None,
-        "php" => match php::find_php_binary(state.native_lib_dir.as_deref()) {
+        "node" => {
+            #[cfg(target_os = "android")]
+            {
+                if crate::runtime::bundled_binary(state.native_lib_dir.as_deref(), "libnode.so").is_none()
+                    || crate::runtime::bundled_binary(state.native_lib_dir.as_deref(), "libwebforge_node.so").is_none()
+                {
+                    let msg = "Node.js tidak tersedia: libnode.so/libwebforge_node.so tidak ditemukan".to_string();
+                    set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
+                    return Err(msg);
+                }
+                None
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                match find_engine_binary(state, engine) {
+                    Some(b) => Some(b),
+                    None => {
+                        let msg = "Node.js tidak tersedia di PATH".to_string();
+                        set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
+                        return Err(msg);
+                    }
+                }
+            }
+        }
+        "php" | "caddy" | "nginx" | "apache" | "python" => match find_engine_binary(state, engine) {
             Some(b) => Some(b),
             None => {
-                let msg = "PHP tidak tersedia: libphp.so tidak ditemukan di nativeLibraryDir dan php tidak ada di PATH".to_string();
+                let msg = format!("Runtime {} tidak tersedia", engine);
                 set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
                 app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
                 return Err(msg);
@@ -507,7 +626,6 @@ pub async fn start_server(state: &AppState, server: &ServerRow, project_path: &s
 
     set_status(&state.pool, &server.id, "starting", None, None, None, false).await;
 
-    // Port conflict: allocation table + real bind test
     if let Err(msg) = allocate_port(&state.pool, &server.id, server.port).await {
         set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
         app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
@@ -515,103 +633,329 @@ pub async fn start_server(state: &AppState, server: &ServerRow, project_path: &s
     }
     if !port_bind_test(host, port_u16) {
         let msg = format!("Port {} sudah digunakan proses lain", server.port);
-        release_port(&state.pool, &server.id).await;
-        set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
-        app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
-        return Err(msg);
+        return Err(fail_start(state, server, msg).await);
     }
 
-    if let Some(binary) = php_binary {
-        // Engine PHP: spawn `php -S host:port -t <docroot> -c <php.ini>`.
-        let settings = php::load_php_settings(&state.pool).await;
-        let ini_path = match php::write_php_ini(&state.config.data_dir, &settings) {
-            Ok(p) => p,
-            Err(e) => {
-                let msg = format!("Gagal menulis php.ini: {}", e);
-                release_port(&state.pool, &server.id).await;
-                set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
-                app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
-                return Err(msg);
+    match engine {
+        "php" => {
+            let binary = binary.expect("php binary validated");
+            let settings = php::load_php_settings(&state.pool).await;
+            let ini_path = match php::write_php_ini(&state.config.data_dir, &settings) {
+                Ok(p) => p,
+                Err(e) => return Err(fail_start(state, server, format!("Gagal menulis php.ini: {}", e)).await),
+            };
+            let launch = ChildLaunch {
+                program: binary,
+                args: php::build_php_server_args(host, port_u16, &doc_root, &ini_path),
+                cwd: Some(PathBuf::from(project_path)),
+                envs: vec![
+                    ("HOME".to_string(), state.config.data_dir.to_string_lossy().to_string()),
+                    ("TMPDIR".to_string(), php::php_tmp_dir(&state.config.data_dir).to_string_lossy().to_string()),
+                    ("PHPRC".to_string(), state.config.data_dir.to_string_lossy().to_string()),
+                ],
+                label: "PHP built-in server".to_string(),
+            };
+            launch_and_finish(state, server, launch).await
+        }
+        "caddy" | "nginx" | "apache" => {
+            let binary = binary.expect("webserver binary validated");
+            let input = crate::webservers::WebServerInput {
+                host: host.to_string(),
+                port: port_u16,
+                doc_root: doc_root.clone(),
+                project_path: PathBuf::from(project_path),
+                data_dir: state.config.data_dir.clone(),
+                server_id: server.id.clone(),
+                proxy_port: server.proxy_port.and_then(|p| u16::try_from(p).ok()),
+                custom_config: server.config_text.clone(),
+            };
+            let config_path = match crate::webservers::write_config(&input, engine) {
+                Ok(p) => p,
+                Err(e) => return Err(fail_start(state, server, format!("Gagal menulis konfigurasi: {}", e)).await),
+            };
+            let home = crate::webservers::server_home(&state.config.data_dir, &server.id, engine);
+            let _ = std::fs::create_dir_all(home.join("tmp"));
+            // Validasi konfigurasi dengan binary sungguhan sebelum start.
+            match validate_webserver_config(state, server, project_path, None).await {
+                Ok((true, _)) => {}
+                Ok((false, output)) => {
+                    let msg = format!("Konfigurasi {} tidak valid: {}", engine, output);
+                    return Err(fail_start(state, server, msg).await);
+                }
+                Err(e) => return Err(fail_start(state, server, e).await),
             }
-        };
-        let launch = ChildLaunch {
-            program: binary,
-            args: php::build_php_server_args(host, port_u16, &doc_root, &ini_path),
-            cwd: Some(PathBuf::from(project_path)),
-            envs: vec![
-                ("HOME".to_string(), state.config.data_dir.to_string_lossy().to_string()),
-                ("TMPDIR".to_string(), php::php_tmp_dir(&state.config.data_dir).to_string_lossy().to_string()),
-                ("PHPRC".to_string(), state.config.data_dir.to_string_lossy().to_string()),
-            ],
-            label: "PHP built-in server".to_string(),
-        };
-        let (pid, child_arc) = match launch_child(state, server, &launch).await {
-            Ok(v) => v,
-            Err(msg) => {
-                release_port(&state.pool, &server.id).await;
-                set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
-                app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
-                return Err(msg);
+            let launch = ChildLaunch {
+                program: binary,
+                args: crate::webservers::launch_args(engine, &config_path, &home),
+                cwd: Some(home.clone()),
+                envs: vec![
+                    ("HOME".to_string(), home.to_string_lossy().to_string()),
+                    ("TMPDIR".to_string(), home.join("tmp").to_string_lossy().to_string()),
+                    ("XDG_DATA_HOME".to_string(), home.join("data").to_string_lossy().to_string()),
+                    ("XDG_CONFIG_HOME".to_string(), home.join("config").to_string_lossy().to_string()),
+                ],
+                label: format!("{} server", engine),
+            };
+            launch_and_finish(state, server, launch).await
+        }
+        "python" => {
+            let binary = binary.expect("python binary validated");
+            let project = PathBuf::from(project_path);
+            let entry = match server.command.as_deref().map(|c| c.trim()).filter(|c| !c.is_empty()) {
+                Some(cmd) if cmd.ends_with(".py") => crate::python_runtime::PythonEntry {
+                    kind: crate::python_runtime::PythonEntryKind::Script,
+                    entry: cmd.to_string(),
+                    app_target: None,
+                },
+                Some("http.server") => crate::python_runtime::PythonEntry {
+                    kind: crate::python_runtime::PythonEntryKind::HttpServer,
+                    entry: "http.server".to_string(),
+                    app_target: None,
+                },
+                Some(other) => {
+                    return Err(fail_start(
+                        state,
+                        server,
+                        format!("Command Python '{}' tidak dikenal; gunakan file .py atau http.server", other),
+                    )
+                    .await)
+                }
+                None => crate::python_runtime::detect_python_entry(&project),
+            };
+            let bundled = crate::python_runtime::is_bundled_python(&binary, state.native_lib_dir.as_deref());
+            let mut envs = if bundled {
+                crate::python_runtime::python_env(&state.config.data_dir, &server.project_id)
+            } else {
+                // Python dari PATH (host dev/test): jangan paksa PYTHONHOME
+                // ke folder bundle yang tidak ada.
+                let mut e = vec![
+                    ("HOME".to_string(), state.config.data_dir.to_string_lossy().to_string()),
+                    ("TMPDIR".to_string(), state.config.data_dir.join("tmp").to_string_lossy().to_string()),
+                ];
+                if let Some(sp) = crate::python_runtime::venv_site_packages(&state.config.data_dir, &server.project_id) {
+                    e.push(("PYTHONPATH".to_string(), sp.to_string_lossy().to_string()));
+                }
+                e
+            };
+            envs.push(("HOST".to_string(), host.to_string()));
+            envs.push(("PORT".to_string(), port_u16.to_string()));
+            let launch = ChildLaunch {
+                program: binary,
+                args: crate::python_runtime::build_python_server_args(&entry, host, port_u16, &project),
+                cwd: Some(project),
+                envs,
+                label: "Python server".to_string(),
+            };
+            launch_and_finish(state, server, launch).await
+        }
+        "node" => {
+            let project = PathBuf::from(project_path);
+            let info = crate::node_runtime::inspect_node_project(&project);
+            let args = match crate::node_runtime::choose_node_entry(
+                &info,
+                &project,
+                server.command.as_deref(),
+                host,
+                port_u16,
+            ) {
+                Ok(a) => a,
+                Err(e) => return Err(fail_start(state, server, e).await),
+            };
+            #[cfg(target_os = "android")]
+            {
+                start_node_android(state, server, &project, args).await
             }
-        };
-        spawn_child_watcher(state.clone(), server.clone(), launch, child_arc);
-        return finish_start(state, server, pid, false).await;
+            #[cfg(not(target_os = "android"))]
+            {
+                let binary = binary.expect("node binary validated");
+                let launch = ChildLaunch {
+                    program: binary,
+                    args,
+                    cwd: Some(project),
+                    envs: vec![
+                        ("HOST".to_string(), host.to_string()),
+                        ("PORT".to_string(), port_u16.to_string()),
+                    ],
+                    label: "Node.js server".to_string(),
+                };
+                launch_and_finish(state, server, launch).await
+            }
+        }
+        _ => {
+            // static
+            #[cfg(target_os = "android")]
+            {
+                let abort = spawn_inprocess_supervisor(state.clone(), server.clone(), host.to_string(), doc_root.clone());
+                state
+                    .processes
+                    .lock()
+                    .await
+                    .insert(server.id.clone(), ProcessHandle::InProcess(abort));
+                let _ = sqlx::query(
+                    "INSERT INTO server_processes (id, server_id, pid, started_at) VALUES (?1,?2,NULL,?3)",
+                )
+                .bind(new_id())
+                .bind(&server.id)
+                .bind(now_iso())
+                .execute(&state.pool)
+                .await;
+                finish_start(state, server, None, true).await
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+                let launch = ChildLaunch {
+                    program: exe,
+                    args: vec![
+                        "serve-static".to_string(),
+                        "--root".to_string(),
+                        doc_root.to_string_lossy().to_string(),
+                        "--port".to_string(),
+                        server.port.to_string(),
+                        "--host".to_string(),
+                        host.to_string(),
+                    ],
+                    cwd: None,
+                    envs: Vec::new(),
+                    label: "static server".to_string(),
+                };
+                launch_and_finish(state, server, launch).await
+            }
+        }
     }
+}
 
-    #[cfg(target_os = "android")]
-    {
-        // In-process static server task dengan supervisor auto-restart.
-        let abort = spawn_inprocess_supervisor(state.clone(), server.clone(), host.to_string(), doc_root.clone());
-        state
-            .processes
-            .lock()
-            .await
-            .insert(server.id.clone(), ProcessHandle::InProcess(abort));
-        let _ = sqlx::query(
-            "INSERT INTO server_processes (id, server_id, pid, started_at) VALUES (?1,?2,NULL,?3)",
-        )
-        .bind(new_id())
-        .bind(&server.id)
-        .bind(now_iso())
-        .execute(&state.pool)
-        .await;
-        return finish_start(state, server, None, true).await;
+#[cfg(target_os = "android")]
+async fn start_node_android(
+    state: &AppState,
+    server: &ServerRow,
+    project: &std::path::Path,
+    args: Vec<String>,
+) -> Result<(), String> {
+    let home = crate::webservers::server_home(&state.config.data_dir, &server.id, "node");
+    let _ = std::fs::create_dir_all(&home);
+    let log_path = home.join("node.log");
+    let status_path = home.join("node-status.txt");
+    let _ = std::fs::write(&status_path, "starting");
+    let started = crate::jni_bridge::node_start(
+        &args,
+        &project.to_string_lossy(),
+        &log_path.to_string_lossy(),
+        &status_path.to_string_lossy(),
+    );
+    if !started {
+        return Err(fail_start(state, server, "NodeService gagal dimulai lewat JNI".to_string()).await);
     }
+    let _ = sqlx::query(
+        "INSERT INTO server_processes (id, server_id, pid, started_at) VALUES (?1,?2,NULL,?3)",
+    )
+    .bind(new_id())
+    .bind(&server.id)
+    .bind(now_iso())
+    .execute(&state.pool)
+    .await;
+    app_log(&state.pool, "server", "info", "NodeService dimulai di proses :node", Some(&server.id)).await;
+    let abort = spawn_node_watcher(state.clone(), server.clone(), args, project.to_path_buf(), log_path, status_path);
+    state
+        .processes
+        .lock()
+        .await
+        .insert(server.id.clone(), ProcessHandle::Node(abort));
+    finish_start(state, server, None, false).await
+}
 
-    #[cfg(not(target_os = "android"))]
-    {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let launch = ChildLaunch {
-            program: exe,
-            args: vec![
-                "serve-static".to_string(),
-                "--root".to_string(),
-                doc_root.to_string_lossy().to_string(),
-                "--port".to_string(),
-                server.port.to_string(),
-                "--host".to_string(),
-                host.to_string(),
-            ],
-            cwd: None,
-            envs: Vec::new(),
-            label: "static server".to_string(),
-        };
-        let (pid, child_arc) = match launch_child(state, server, &launch).await {
-            Ok(v) => v,
-            Err(msg) => {
-                release_port(&state.pool, &server.id).await;
-                set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
-                return Err(msg);
+/// Watcher Node Android: tail file log ke log center dan auto-restart
+/// proses :node bila Node keluar tak terduga (maks 3 kali, backoff sama).
+#[cfg(target_os = "android")]
+fn spawn_node_watcher(
+    state: AppState,
+    server: ServerRow,
+    args: Vec<String>,
+    project: PathBuf,
+    log_path: PathBuf,
+    status_path: PathBuf,
+) -> tokio::task::AbortHandle {
+    let handle = tokio::spawn(async move {
+        let mut attempts_used: u32 = 0;
+        let mut log_offset: u64 = 0;
+        loop {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            // Tail log Node ke application_logs.
+            if let Ok(content) = std::fs::read(&log_path) {
+                if (content.len() as u64) > log_offset {
+                    let new = &content[log_offset as usize..];
+                    log_offset = content.len() as u64;
+                    for line in String::from_utf8_lossy(new).lines() {
+                        if !line.trim().is_empty() {
+                            app_log(&state.pool, "server", "info", line, Some(&server.id)).await;
+                        }
+                    }
+                }
             }
-        };
-        spawn_child_watcher(state.clone(), server.clone(), launch, child_arc);
-        finish_start(state, server, pid, false).await
-    }
+            let status = db_status(&state.pool, &server.id).await;
+            if !matches!(status.as_deref(), Some("running") | Some("starting")) {
+                return;
+            }
+            let node_status = std::fs::read_to_string(&status_path).unwrap_or_default();
+            let node_status = node_status.trim();
+            if node_status == "starting" || node_status == "stopped" {
+                continue;
+            }
+            // Status numerik = Node keluar.
+            if node_status.parse::<i32>().is_ok() {
+                mark_process_ended(&state.pool, &server.id, node_status.parse::<i32>().ok()).await;
+                match php::restart_delay(attempts_used) {
+                    Some(delay) => {
+                        attempts_used += 1;
+                        let msg = format!(
+                            "Node berhenti tak terduga (exit code {}); restart otomatis percobaan {}/{} dalam {} detik",
+                            node_status,
+                            attempts_used,
+                            php::MAX_RESTART_ATTEMPTS,
+                            delay.as_secs()
+                        );
+                        app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
+                        set_status(&state.pool, &server.id, "starting", None, None, Some(&msg), false).await;
+                        tokio::time::sleep(delay).await;
+                        if db_status(&state.pool, &server.id).await.as_deref() != Some("starting") {
+                            return;
+                        }
+                        let _ = std::fs::write(&status_path, "starting");
+                        let ok = crate::jni_bridge::node_start(
+                            &args,
+                            &project.to_string_lossy(),
+                            &log_path.to_string_lossy(),
+                            &status_path.to_string_lossy(),
+                        );
+                        if ok && wait_healthy(server.port as u16, Duration::from_secs(15)).await {
+                            let started = now_iso();
+                            set_status(&state.pool, &server.id, "running", None, Some(&started), None, false).await;
+                            app_log(&state.pool, "server", "info", "Restart Node berhasil, health check lolos", Some(&server.id)).await;
+                        }
+                    }
+                    None => {
+                        let msg = format!(
+                            "Node berhenti tak terduga (exit code {}) dan restart otomatis gagal setelah {} percobaan",
+                            node_status,
+                            php::MAX_RESTART_ATTEMPTS
+                        );
+                        set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
+                        app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
+                        release_port(&state.pool, &server.id).await;
+                        state.processes.lock().await.remove(&server.id);
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    handle.abort_handle()
 }
 
 async fn finish_start(state: &AppState, server: &ServerRow, pid: Option<i64>, in_process: bool) -> Result<(), String> {
     let port_u16 = server.port as u16;
-    if wait_healthy(port_u16, Duration::from_secs(5)).await {
+    let timeout = engine_health_timeout(&server.engine);
+    if wait_healthy(port_u16, timeout).await {
         let started = now_iso();
         set_status(&state.pool, &server.id, "running", pid, Some(&started), None, in_process).await;
         app_log(
@@ -624,7 +968,7 @@ async fn finish_start(state: &AppState, server: &ServerRow, pid: Option<i64>, in
         .await;
         Ok(())
     } else {
-        let msg = "Health check gagal dalam 5 detik; proses dihentikan".to_string();
+        let msg = format!("Health check gagal dalam {} detik; proses dihentikan", timeout.as_secs());
         stop_process_internal(state, &server.id).await;
         set_status(&state.pool, &server.id, "error", None, None, Some(&msg), in_process).await;
         app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
@@ -641,6 +985,13 @@ async fn stop_process_internal(state: &AppState, server_id: &str) {
         Some(ProcessHandle::InProcess(abort)) => {
             abort.abort();
         }
+        Some(ProcessHandle::Node(abort)) => {
+            abort.abort();
+            #[cfg(target_os = "android")]
+            {
+                let _ = crate::jni_bridge::node_stop();
+            }
+        }
         None => {}
     }
     release_port(&state.pool, server_id).await;
@@ -656,6 +1007,21 @@ pub async fn stop_server(state: &AppState, server_id: &str) {
     stop_process_internal(state, server_id).await;
     set_status(&state.pool, server_id, "stopped", None, None, None, false).await;
     app_log(&state.pool, "server", "info", "Server dihentikan", Some(server_id)).await;
+}
+
+/// Reload konfigurasi web server: validasi dulu, lalu restart proses
+/// dengan konfigurasi baru. Restart penuh dipakai agar perilaku sama di
+/// ketiga engine dan kegagalan validasi tidak menjatuhkan server lama.
+pub async fn reload_server(state: &AppState, server: &ServerRow, project_path: &str) -> Result<(), String> {
+    if !matches!(server.engine.as_str(), "caddy" | "nginx" | "apache") {
+        return Err(format!("Engine {} tidak mendukung reload konfigurasi", server.engine));
+    }
+    let (valid, output) = validate_webserver_config(state, server, project_path, None).await?;
+    if !valid {
+        return Err(format!("Konfigurasi tidak valid, reload dibatalkan: {}", output));
+    }
+    stop_server(state, &server.id).await;
+    start_server(state, server, project_path).await
 }
 
 #[cfg(test)]

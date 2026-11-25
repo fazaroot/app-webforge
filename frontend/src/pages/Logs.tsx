@@ -55,9 +55,9 @@ export function Logs() {
           <div className="space-y-1 max-h-[60vh] overflow-auto">
             {logs.data!.map((l) => (
               <p key={l.id} className="text-xs font-mono">
-                <span className="text-slate-400">{formatDateTime(l.created_at)}</span>{' '}
-                <span className={l.severity === 'error' ? 'text-danger' : l.severity === 'warn' ? 'text-warning' : 'text-slate-500'}>[{l.severity}]</span>{' '}
-                <span className="text-slate-500">({l.category})</span> {l.message}
+                <span className="text-slate-600 dark:text-slate-400">{formatDateTime(l.created_at)}</span>{' '}
+                <span className={l.severity === 'error' ? 'text-danger' : l.severity === 'warn' ? 'text-warning' : 'text-slate-600 dark:text-slate-400'}>[{l.severity}]</span>{' '}
+                <span className="text-slate-600 dark:text-slate-400">({l.category})</span> {l.message}
               </p>
             ))}
           </div>

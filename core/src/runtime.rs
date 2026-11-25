@@ -1,6 +1,6 @@
 use serde::Serialize;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize)]
@@ -14,8 +14,6 @@ pub struct RuntimeInfo {
 }
 
 const REASON: &str = "Belum dibundel — lihat docs/RUNTIME_PLAN.md";
-const REASON_PHP: &str =
-    "Binary PHP tidak ditemukan: libphp.so tidak ada di nativeLibraryDir dan php tidak ada di PATH";
 
 pub(crate) fn find_in_path(bin: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
@@ -40,28 +38,122 @@ pub(crate) fn find_in_path(bin: &str) -> Option<PathBuf> {
     None
 }
 
-async fn binary_version(path: &PathBuf) -> Option<String> {
-    let out = tokio::time::timeout(
-        Duration::from_secs(3),
-        tokio::process::Command::new(path).arg("--version").output(),
-    )
-    .await
-    .ok()?
-    .ok()?;
-    let text = if !out.stdout.is_empty() {
-        String::from_utf8_lossy(&out.stdout).to_string()
+/// Binary terbundel di nativeLibraryDir (file .so hasil ekstraksi APK).
+pub fn bundled_binary(native_lib_dir: Option<&Path>, file_name: &str) -> Option<PathBuf> {
+    let dir = native_lib_dir?;
+    let cand = dir.join(file_name);
+    if cand.is_file() {
+        Some(cand)
     } else {
-        String::from_utf8_lossy(&out.stderr).to_string()
-    };
-    let first = text.lines().next()?.trim().to_string();
-    if first.is_empty() {
         None
-    } else {
-        Some(first.chars().take(100).collect())
     }
 }
 
-async fn php_runtime_info(native_lib_dir: Option<&std::path::Path>) -> RuntimeInfo {
+/// Cari binary runtime: bundled .so lebih dulu, lalu nama PATH.
+pub fn find_runtime_binary(
+    native_lib_dir: Option<&Path>,
+    bundled_name: &str,
+    path_names: &[&str],
+) -> Option<(PathBuf, bool)> {
+    if let Some(p) = bundled_binary(native_lib_dir, bundled_name) {
+        return Some((p, true));
+    }
+    path_names
+        .iter()
+        .find_map(|b| find_in_path(b))
+        .map(|p| (p, false))
+}
+
+struct ProbeResult {
+    ok: bool,
+    version: Option<String>,
+    error: Option<String>,
+}
+
+/// Jalankan perintah versi nyata dengan timeout. Runtime hanya dianggap
+/// tersedia bila prosesnya benar-benar berjalan dan keluar sukses.
+async fn probe_binary(path: &Path, args: &[&str], envs: &[(String, String)]) -> ProbeResult {
+    let mut cmd = tokio::process::Command::new(path);
+    cmd.args(args);
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    let out = tokio::time::timeout(Duration::from_secs(5), cmd.output()).await;
+    match out {
+        Ok(Ok(o)) => {
+            let text = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            let first = text
+                .lines()
+                .map(|l| l.trim())
+                .find(|l| !l.is_empty())
+                .map(|l| l.chars().take(120).collect::<String>());
+            if o.status.success() {
+                ProbeResult { ok: true, version: first, error: None }
+            } else {
+                ProbeResult {
+                    ok: false,
+                    version: first,
+                    error: Some(format!(
+                        "Binary {} gagal dijalankan (exit code {})",
+                        path.display(),
+                        o.status.code().map(|c| c.to_string()).unwrap_or_else(|| "?".to_string())
+                    )),
+                }
+            }
+        }
+        Ok(Err(e)) => ProbeResult {
+            ok: false,
+            version: None,
+            error: Some(format!("Binary {} tidak dapat dieksekusi: {}", path.display(), e)),
+        },
+        Err(_) => ProbeResult {
+            ok: false,
+            version: None,
+            error: Some(format!("Binary {} timeout saat probe versi", path.display())),
+        },
+    }
+}
+
+fn unavailable(id: &str, name: &str, reason: String) -> RuntimeInfo {
+    RuntimeInfo {
+        id: id.to_string(),
+        name: name.to_string(),
+        available: false,
+        version: None,
+        reason: Some(reason),
+        source: "none".to_string(),
+    }
+}
+
+async fn generic_runtime(
+    id: &str,
+    name: &str,
+    bundled_name: &str,
+    path_names: &[&str],
+    version_args: &[&str],
+    native_lib_dir: Option<&Path>,
+) -> RuntimeInfo {
+    match find_runtime_binary(native_lib_dir, bundled_name, path_names) {
+        Some((path, bundled)) => {
+            let probe = probe_binary(&path, version_args, &[]).await;
+            RuntimeInfo {
+                id: id.to_string(),
+                name: name.to_string(),
+                available: probe.ok,
+                version: probe.version,
+                reason: probe.error,
+                source: if bundled { "bundled".to_string() } else { "path".to_string() },
+            }
+        }
+        None => unavailable(id, name, REASON.to_string()),
+    }
+}
+
+async fn php_runtime_info(native_lib_dir: Option<&Path>) -> RuntimeInfo {
     match crate::php::find_php_binary(native_lib_dir) {
         Some(path) => {
             let info = crate::php::probe_php_info(Some(path.clone())).await;
@@ -78,15 +170,127 @@ async fn php_runtime_info(native_lib_dir: Option<&std::path::Path>) -> RuntimeIn
                 },
             }
         }
-        None => RuntimeInfo {
-            id: "php".to_string(),
-            name: "PHP".to_string(),
-            available: false,
-            version: None,
-            reason: Some(REASON_PHP.to_string()),
-            source: "none".to_string(),
-        },
+        None => unavailable(
+            "php",
+            "PHP",
+            "Binary PHP tidak ditemukan: libphp.so tidak ada di nativeLibraryDir dan php tidak ada di PATH".to_string(),
+        ),
     }
+}
+
+async fn python_runtime_info(native_lib_dir: Option<&Path>) -> RuntimeInfo {
+    match crate::python_runtime::find_python_binary(native_lib_dir) {
+        Some(path) => {
+            let bundled = crate::python_runtime::is_bundled_python(&path, native_lib_dir);
+            let mut envs = Vec::new();
+            if let Some(data_dir) = crate::state::data_dir() {
+                let home = crate::python_runtime::python_home(&data_dir);
+                if crate::python_runtime::stdlib_dir_path(&data_dir).is_dir() {
+                    envs.push(("PYTHONHOME".to_string(), home.to_string_lossy().to_string()));
+                }
+                envs.push(("HOME".to_string(), data_dir.to_string_lossy().to_string()));
+                envs.push(("TMPDIR".to_string(), data_dir.join("tmp").to_string_lossy().to_string()));
+            }
+            let probe = probe_binary(&path, &["--version"], &envs).await;
+            RuntimeInfo {
+                id: "python".to_string(),
+                name: "Python".to_string(),
+                available: probe.ok,
+                version: probe.version.map(|v| v.trim_start_matches("Python ").to_string()),
+                reason: probe.error,
+                source: if bundled { "bundled".to_string() } else { "path".to_string() },
+            }
+        }
+        None => unavailable("python", "Python", REASON.to_string()),
+    }
+}
+
+fn node_runtime_info(native_lib_dir: Option<&Path>) -> RuntimeInfo {
+    // Node Android berjalan lewat NodeService (:node) dengan libnode.so +
+    // shim libwebforge_node.so. Keduanya harus ada; versi dibaca dari file
+    // versi yang disalin Kotlin dari asset hasil build CI.
+    let libnode = bundled_binary(native_lib_dir, "libnode.so");
+    let shim = bundled_binary(native_lib_dir, "libwebforge_node.so");
+    if libnode.is_some() && shim.is_some() {
+        let version = crate::state::data_dir()
+            .and_then(|d| std::fs::read_to_string(d.join("assets").join("node-version.txt")).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        return RuntimeInfo {
+            id: "node".to_string(),
+            name: "Node.js".to_string(),
+            available: true,
+            version,
+            reason: None,
+            source: "bundled".to_string(),
+        };
+    }
+    if find_in_path("node").is_some() {
+        return RuntimeInfo {
+            id: "node".to_string(),
+            name: "Node.js".to_string(),
+            available: true,
+            version: None,
+            reason: None,
+            source: "path".to_string(),
+        };
+    }
+    unavailable("node", "Node.js", REASON.to_string())
+}
+
+async fn postgres_runtime_info(native_lib_dir: Option<&Path>) -> RuntimeInfo {
+    let bundled = bundled_binary(native_lib_dir, "libpostgres.so");
+    let initdb = bundled_binary(native_lib_dir, "libinitdb.so");
+    let pgctl = bundled_binary(native_lib_dir, "libpgctl.so");
+    if let (Some(path), Some(_), Some(_)) = (bundled, initdb, pgctl) {
+        let probe = probe_binary(&path, &["--version"], &[]).await;
+        return RuntimeInfo {
+            id: "postgresql".to_string(),
+            name: "PostgreSQL".to_string(),
+            available: probe.ok,
+            version: probe.version.and_then(|v| crate::db_runtime::parse_postgres_version(&v)),
+            reason: probe.error,
+            source: "bundled".to_string(),
+        };
+    }
+    if let Some(path) = find_in_path("postgres") {
+        let probe = probe_binary(&path, &["--version"], &[]).await;
+        return RuntimeInfo {
+            id: "postgresql".to_string(),
+            name: "PostgreSQL".to_string(),
+            available: probe.ok,
+            version: probe.version.and_then(|v| crate::db_runtime::parse_postgres_version(&v)),
+            reason: probe.error,
+            source: "path".to_string(),
+        };
+    }
+    unavailable("postgresql", "PostgreSQL", REASON.to_string())
+}
+
+async fn mariadb_runtime_info(native_lib_dir: Option<&Path>) -> RuntimeInfo {
+    if let Some(path) = bundled_binary(native_lib_dir, "libmariadbd.so") {
+        let probe = probe_binary(&path, &["--version"], &[]).await;
+        return RuntimeInfo {
+            id: "mariadb".to_string(),
+            name: "MariaDB".to_string(),
+            available: probe.ok,
+            version: probe.version.and_then(|v| crate::db_runtime::parse_mariadb_version(&v)),
+            reason: probe.error,
+            source: "bundled".to_string(),
+        };
+    }
+    if let Some(path) = find_in_path("mariadbd").or_else(|| find_in_path("mysqld")) {
+        let probe = probe_binary(&path, &["--version"], &[]).await;
+        return RuntimeInfo {
+            id: "mariadb".to_string(),
+            name: "MariaDB".to_string(),
+            available: probe.ok,
+            version: probe.version.and_then(|v| crate::db_runtime::parse_mariadb_version(&v)),
+            reason: probe.error,
+            source: "path".to_string(),
+        };
+    }
+    unavailable("mariadb", "MariaDB", REASON.to_string())
 }
 
 pub async fn detect_runtimes() -> Vec<RuntimeInfo> {
@@ -94,6 +298,7 @@ pub async fn detect_runtimes() -> Vec<RuntimeInfo> {
 }
 
 pub async fn detect_runtimes_with(native_lib_dir: Option<PathBuf>) -> Vec<RuntimeInfo> {
+    let dir = native_lib_dir.as_deref();
     let mut out = vec![RuntimeInfo {
         id: "static".to_string(),
         name: "WebForge Static Server".to_string(),
@@ -102,39 +307,14 @@ pub async fn detect_runtimes_with(native_lib_dir: Option<PathBuf>) -> Vec<Runtim
         reason: None,
         source: "bundled".to_string(),
     }];
-    out.push(php_runtime_info(native_lib_dir.as_deref()).await);
-    let defs: [(&str, &str, &[&str]); 6] = [
-        ("nginx", "Nginx", &["nginx"]),
-        ("apache", "Apache", &["apache2", "httpd"]),
-        ("python", "Python", &["python3", "python"]),
-        ("node", "Node.js", &["node"]),
-        ("mariadb", "MariaDB", &["mariadbd", "mysqld"]),
-        ("postgresql", "PostgreSQL", &["postgres"]),
-    ];
-    for (id, name, bins) in defs {
-        let found = bins.iter().find_map(|b| find_in_path(b));
-        match found {
-            Some(p) => {
-                let version = binary_version(&p).await;
-                out.push(RuntimeInfo {
-                    id: id.to_string(),
-                    name: name.to_string(),
-                    available: true,
-                    version,
-                    reason: None,
-                    source: "path".to_string(),
-                });
-            }
-            None => out.push(RuntimeInfo {
-                id: id.to_string(),
-                name: name.to_string(),
-                available: false,
-                version: None,
-                reason: Some(REASON.to_string()),
-                source: "none".to_string(),
-            }),
-        }
-    }
+    out.push(php_runtime_info(dir).await);
+    out.push(generic_runtime("caddy", "Caddy", "libcaddy.so", &["caddy"], &["version"], dir).await);
+    out.push(generic_runtime("nginx", "Nginx", "libnginx.so", &["nginx"], &["-v"], dir).await);
+    out.push(generic_runtime("apache", "Apache", "libhttpd.so", &["httpd", "apache2"], &["-v"], dir).await);
+    out.push(python_runtime_info(dir).await);
+    out.push(node_runtime_info(dir));
+    out.push(mariadb_runtime_info(dir).await);
+    out.push(postgres_runtime_info(dir).await);
     out
 }
 
@@ -177,11 +357,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn static_always_available() {
+    async fn static_always_available_and_all_runtimes_listed() {
         let r = detect_runtimes().await;
-        assert_eq!(r.len(), 8);
+        assert_eq!(r.len(), 9);
         assert!(r[0].available);
         assert_eq!(r[0].id, "static");
+        let ids: Vec<&str> = r.iter().map(|x| x.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["static", "php", "caddy", "nginx", "apache", "python", "node", "mariadb", "postgresql"]
+        );
         for other in &r[1..] {
             if !other.available {
                 assert!(other.reason.is_some());

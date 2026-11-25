@@ -19,7 +19,17 @@ vi.mock('../lib/api', () => ({
     startServer: vi.fn(),
     stopServer: vi.fn(),
     restartServer: vi.fn(),
+    reloadServer: vi.fn(),
     deleteServer: vi.fn(),
+    serverConfig: vi.fn(),
+    putServerConfig: vi.fn(),
+    validateServerConfig: vi.fn(),
+    pythonInfo: vi.fn(),
+    projectPython: vi.fn(),
+    createPythonVenv: vi.fn(),
+    installPythonDeps: vi.fn(),
+    projectNode: vi.fn(),
+    installNodeDeps: vi.fn(),
     phpInfo: vi.fn(),
     phpSettings: vi.fn(),
     putPhpSettings: vi.fn(),
@@ -77,7 +87,10 @@ beforeEach(() => {
   mockIsNative.mockReturnValue(false);
   mockApi.projects.mockResolvedValue([laravel, staticProject]);
   mockApi.servers.mockResolvedValue([]);
-  mockApi.runtimes.mockResolvedValue([]);
+  mockApi.runtimes.mockResolvedValue([
+    { id: 'static', name: 'WebForge Static Server', available: true, version: '0.3.0', reason: null },
+    { id: 'php', name: 'PHP', available: true, version: '8.3.0', reason: null },
+  ]);
   mockApi.phpInfo.mockResolvedValue({
     available: true, version: '8.3.0', extensions: ['mbstring', 'json'], binary_path: '/data/php', error: null,
   });
@@ -100,7 +113,7 @@ describe('Servers engine PHP', () => {
 
     fireEvent.change(projectSelect, { target: { value: 'p-static' } });
     await waitFor(() => expect(screen.queryByRole('option', { name: 'PHP built-in server' })).toBeNull());
-    expect(screen.getByText(/Engine: WebForge Static Server/)).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'WebForge Static Server' })).toBeInTheDocument();
   });
 
   it('membuat server PHP mengirim engine php dan document root rekomendasi', async () => {
@@ -108,6 +121,7 @@ describe('Servers engine PHP', () => {
       id: 's1', project_id: 'p-laravel', project_name: 'Situs Laravel', engine: 'php', port: 8080,
       bind_lan: false, document_root: 'public', status: 'stopped', pid: null, started_at: null,
       uptime_seconds: 0, url_local: 'http://127.0.0.1:8080', url_lan: null, error_message: null,
+      config_text: null, proxy_port: null, command: null,
     });
     renderWithQuery(<Servers />);
     await selectProjectInServers('p-laravel');

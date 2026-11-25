@@ -39,7 +39,7 @@ export function Security() {
 
       <Card title="Token API perangkat ini">
         <p className="text-sm">Token aktif (disamarkan): <span className="font-mono">{tokenMask}</span></p>
-        <p className="text-xs text-slate-500 mt-1">
+        <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
           Token penuh tidak pernah ditampilkan di aplikasi. Token dibuat dan disimpan oleh Core di perangkat ini;
           jangan membagikannya ke siapa pun.
         </p>

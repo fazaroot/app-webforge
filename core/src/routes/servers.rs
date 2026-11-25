@@ -25,6 +25,9 @@ pub struct ServerOut {
     pub url_lan: Option<String>,
     pub error_message: Option<String>,
     pub in_process: bool,
+    pub config_text: Option<String>,
+    pub proxy_port: Option<i64>,
+    pub command: Option<String>,
 }
 
 pub fn server_out(row: &sqlx::sqlite::SqliteRow) -> ServerOut {
@@ -62,6 +65,9 @@ pub fn server_out(row: &sqlx::sqlite::SqliteRow) -> ServerOut {
         url_lan,
         error_message: row.get("error_message"),
         in_process: row.get::<i64, _>("in_process") != 0,
+        config_text: row.try_get("config_text").ok().flatten(),
+        proxy_port: row.try_get("proxy_port").ok().flatten(),
+        command: row.try_get("command").ok().flatten(),
     }
 }
 
@@ -92,6 +98,8 @@ pub struct CreateServer {
     pub port: i64,
     pub bind_lan: Option<bool>,
     pub document_root: Option<String>,
+    pub proxy_port: Option<i64>,
+    pub command: Option<String>,
 }
 
 pub async fn create_server(
@@ -115,10 +123,11 @@ pub async fn create_server(
                 format!("Runtime {} belum tersedia", body.engine),
             ));
         }
-        return Err(ApiError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("Runtime {} terdeteksi tetapi belum didukung sebagai engine server", body.engine),
-        ));
+    }
+    if let Some(proxy_port) = body.proxy_port {
+        if !(1..=65535).contains(&proxy_port) || proxy_port == body.port {
+            return Err(ApiError::bad_request("proxy_port tidak valid"));
+        }
     }
     if !(1024..=65535).contains(&body.port) {
         return Err(ApiError::bad_request("Port harus antara 1024 dan 65535"));
@@ -132,7 +141,7 @@ pub async fn create_server(
     let id = new_id();
     let now = now_iso();
     sqlx::query(
-        "INSERT INTO server_instances (id, project_id, engine, port, bind_lan, document_root, status, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,'stopped',?7,?7)",
+        "INSERT INTO server_instances (id, project_id, engine, port, bind_lan, document_root, status, proxy_port, command, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,'stopped',?7,?8,?9,?9)",
     )
     .bind(&id)
     .bind(&body.project_id)
@@ -140,6 +149,8 @@ pub async fn create_server(
     .bind(body.port)
     .bind(if body.bind_lan.unwrap_or(false) { 1 } else { 0 })
     .bind(&document_root)
+    .bind(body.proxy_port)
+    .bind(&body.command)
     .bind(&now)
     .execute(&state.pool)
     .await
@@ -176,6 +187,9 @@ fn to_server_row(row: &sqlx::sqlite::SqliteRow) -> ServerRow {
         bind_lan: row.get::<i64, _>("bind_lan") != 0,
         document_root: row.get("document_root"),
         status: row.get("status"),
+        config_text: row.try_get("config_text").ok().flatten(),
+        proxy_port: row.try_get("proxy_port").ok().flatten(),
+        command: row.try_get("command").ok().flatten(),
     }
 }
 
@@ -249,4 +263,127 @@ pub async fn server_logs(
         .collect();
     out.reverse();
     Ok(Json(json!(out)))
+}
+
+
+#[derive(Serialize)]
+pub struct ServerConfigOut {
+    pub config_text: String,
+    pub generated_config: String,
+    pub editable: bool,
+}
+
+#[derive(Deserialize)]
+pub struct PutConfigBody {
+    pub config_text: String,
+}
+
+#[derive(Serialize)]
+pub struct ValidateConfigOut {
+    pub valid: bool,
+    pub output: String,
+}
+
+async fn server_and_project_path(
+    state: &AppState,
+    server_id: &str,
+) -> ApiResult<(ServerRow, String)> {
+    let row = get_server_row(&state.pool, server_id).await?;
+    let server = to_server_row(&row);
+    let project = super::projects::get_project_row(&state.pool, &server.project_id).await?;
+    Ok((server, project.get::<String, _>("path")))
+}
+
+fn generated_config(state: &AppState, server: &ServerRow, project_path: &str) -> ApiResult<String> {
+    let doc_root = crate::util::resolve_inside(
+        &std::path::PathBuf::from(project_path),
+        &server.document_root,
+        true,
+    )
+    .map_err(|e| ApiError::bad_request(e.message))?;
+    let input = crate::webservers::WebServerInput {
+        host: if server.bind_lan { "0.0.0.0".to_string() } else { "127.0.0.1".to_string() },
+        port: server.port as u16,
+        doc_root,
+        project_path: std::path::PathBuf::from(project_path),
+        data_dir: state.config.data_dir.clone(),
+        server_id: server.id.clone(),
+        proxy_port: server.proxy_port.and_then(|p| u16::try_from(p).ok()),
+        custom_config: None,
+    };
+    match server.engine.as_str() {
+        "caddy" => Ok(crate::webservers::generate_caddyfile(&input)),
+        "nginx" => Ok(crate::webservers::generate_nginx_config(&input)),
+        "apache" => crate::webservers::generate_httpd_config(&input).map_err(ApiError::bad_request),
+        other => Err(ApiError::bad_request(format!(
+            "Engine {} tidak memiliki editor konfigurasi",
+            other
+        ))),
+    }
+}
+
+pub async fn get_config(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let (server, project_path) = server_and_project_path(&state, &id).await?;
+    let generated = generated_config(&state, &server, &project_path)?;
+    let out = ServerConfigOut {
+        config_text: server.config_text.clone().unwrap_or_else(|| generated.clone()),
+        generated_config: generated,
+        editable: true,
+    };
+    Ok(Json(serde_json::to_value(out).unwrap()))
+}
+
+pub async fn put_config(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<PutConfigBody>,
+) -> ApiResult<Json<Value>> {
+    let (server, project_path) = server_and_project_path(&state, &id).await?;
+    let generated = generated_config(&state, &server, &project_path)?;
+    sqlx::query("UPDATE server_instances SET config_text=?1, updated_at=?2 WHERE id=?3")
+        .bind(&body.config_text)
+        .bind(now_iso())
+        .bind(&id)
+        .execute(&state.pool)
+        .await
+        .map_err(db_err)?;
+    let out = ServerConfigOut {
+        config_text: body.config_text,
+        generated_config: generated,
+        editable: true,
+    };
+    Ok(Json(serde_json::to_value(out).unwrap()))
+}
+
+pub async fn validate_config(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<PutConfigBody>,
+) -> ApiResult<Json<Value>> {
+    let (server, project_path) = server_and_project_path(&state, &id).await?;
+    let (valid, output) = crate::process::validate_webserver_config(
+        &state,
+        &server,
+        &project_path,
+        Some(&body.config_text),
+    )
+    .await
+    .map_err(ApiError::bad_request)?;
+    let out = ValidateConfigOut { valid, output };
+    Ok(Json(serde_json::to_value(out).unwrap()))
+}
+
+pub async fn reload_server(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let (server, project_path) = server_and_project_path(&state, &id).await?;
+    crate::process::reload_server(&state, &server, &project_path)
+        .await
+        .map_err(ApiError::bad_request)?;
+    let row = get_server_row(&state.pool, &id).await?;
+    Ok(Json(serde_json::to_value(server_out(&row)).unwrap()))
 }

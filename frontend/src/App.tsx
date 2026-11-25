@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  Activity, Code2, Database, FolderGit2, FolderOpen, LayoutDashboard, Menu, ScrollText,
-  Server, Settings as SettingsIcon, ShieldCheck, TerminalSquare, Wrench, X,
+  Activity, Code2, Database, FolderGit2, FolderOpen, LayoutDashboard, Menu, Moon, ScrollText,
+  Server, Settings as SettingsIcon, ShieldCheck, Sun, TerminalSquare, Wrench, X,
 } from 'lucide-react';
 import { api } from './lib/api';
 import { OfflineBanner } from './components/OfflineBanner';
@@ -40,19 +40,32 @@ const BOTTOM: Section[] = ['dashboard', 'projects', 'servers', 'terminal'];
 export default function App() {
   const section = useAppStore((s) => s.section);
   const setSection = useAppStore((s) => s.setSection);
+  const theme = useAppStore((s) => s.theme);
+  const setTheme = useAppStore((s) => s.setTheme);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [systemDark, setSystemDark] = useState(
+    () => window.matchMedia('(prefers-color-scheme: dark)').matches,
+  );
 
   const health = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 15000, retry: 1 });
 
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
     const onChange = () => {
+      setSystemDark(mq.matches);
       const t = useAppStore.getState().theme;
       if (t === 'system') document.documentElement.classList.toggle('dark', mq.matches);
     };
     mq.addEventListener('change', onChange);
     return () => mq.removeEventListener('change', onChange);
   }, []);
+
+  const isDark = theme === 'dark' || (theme === 'system' && systemDark);
+
+  function toggleTheme() {
+    // Tema system: tentukan mode efektif saat ini, lalu set eksplisit lawannya.
+    setTheme(isDark ? 'light' : 'dark');
+  }
 
   const active = SECTIONS.find((s) => s.id === section);
 
@@ -69,7 +82,16 @@ export default function App() {
           <p className="font-bold leading-tight">WebForge Mobile</p>
           <p className="text-xs opacity-90 leading-tight">{active?.label}</p>
         </div>
-        <span className={`ml-auto rounded-full px-2 py-0.5 text-xs font-medium ${health.isSuccess ? 'bg-success' : 'bg-danger'}`}>
+        <button
+          type="button"
+          aria-label={isDark ? 'Ganti ke tema terang' : 'Ganti ke tema gelap'}
+          title={isDark ? 'Ganti ke tema terang' : 'Ganti ke tema gelap'}
+          onClick={toggleTheme}
+          className="ml-auto p-2 rounded-lg hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-white/60"
+        >
+          {isDark ? <Sun size={20} /> : <Moon size={20} />}
+        </button>
+        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${health.isSuccess ? 'bg-success' : 'bg-danger'}`}>
           {health.isSuccess ? 'Core online' : health.isLoading ? 'Menghubungi…' : 'Core offline'}
         </span>
       </header>
@@ -116,12 +138,12 @@ export default function App() {
             const s = SECTIONS.find((x) => x.id === id) as { id: Section; label: string; icon: typeof LayoutDashboard };
             return (
               <button key={id} type="button" onClick={() => go(id)}
-                className={`flex flex-col items-center gap-0.5 py-2 text-[11px] ${section === id ? 'text-primary font-semibold' : 'text-slate-500 dark:text-slate-400'}`}>
+                className={`flex flex-col items-center gap-0.5 py-2 text-[11px] ${section === id ? 'text-primary font-semibold' : 'text-slate-600 dark:text-slate-400'}`}>
                 <s.icon size={20} /> {s.label}
               </button>
             );
           })}
-          <button type="button" onClick={() => setDrawerOpen(true)} className="flex flex-col items-center gap-0.5 py-2 text-[11px] text-slate-500 dark:text-slate-400">
+          <button type="button" onClick={() => setDrawerOpen(true)} className="flex flex-col items-center gap-0.5 py-2 text-[11px] text-slate-600 dark:text-slate-400">
             <Menu size={20} /> Lainnya
           </button>
         </div>

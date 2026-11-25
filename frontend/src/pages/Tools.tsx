@@ -36,13 +36,13 @@ export function Tools() {
       <Card title="Diagnostik sistem">
         {diag.isLoading ? <LoadingBox /> : diag.isError ? <ErrorBox message="Gagal memuat diagnostik." /> : (
           <>
-            <p className="text-xs text-slate-500 mb-2">Dihasilkan: {formatDateTime(diag.data?.generated_at)}</p>
+            <p className="text-xs text-slate-600 dark:text-slate-400 mb-2">Dihasilkan: {formatDateTime(diag.data?.generated_at)}</p>
             <div className="space-y-2">
               {(diag.data?.checks ?? []).map((c) => (
                 <div key={c.name} className="flex items-start justify-between gap-2 rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2">
                   <div>
                     <p className="text-sm font-medium">{c.name}</p>
-                    <p className="text-xs text-slate-500">{c.detail}</p>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">{c.detail}</p>
                   </div>
                   <StatusPill status={c.status} />
                 </div>

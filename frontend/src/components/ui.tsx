@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 
 export function Card({ title, children, right }: { title?: string; children: ReactNode; right?: ReactNode }) {
   return (
-    <section className="rounded-xl bg-surface dark:bg-darksurface border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
+    <section className="rounded-xl bg-surface dark:bg-darksurface border border-slate-200 dark:border-slate-700 p-4 shadow-sm shadow-slate-900/5 dark:shadow-black/20">
       {(title || right) && (
         <div className="flex items-center justify-between gap-2 mb-3">
           {title ? <h2 className="font-semibold text-ink dark:text-darkink">{title}</h2> : <span />}
@@ -23,11 +23,48 @@ export function ErrorBox({ message }: { message: string }) {
 }
 
 export function EmptyBox({ message }: { message: string }) {
-  return <p className="text-sm text-slate-500 dark:text-slate-400 py-4 text-center">{message}</p>;
+  return <p className="text-sm text-slate-600 dark:text-slate-400 py-4 text-center">{message}</p>;
 }
 
 export function LoadingBox({ message = 'Memuat…' }: { message?: string }) {
-  return <p className="text-sm text-slate-500 dark:text-slate-400 py-4 text-center">{message}</p>;
+  return <p className="text-sm text-slate-600 dark:text-slate-400 py-4 text-center">{message}</p>;
+}
+
+/** Blok skeleton tunggal dengan animasi shimmer (dimatikan bila prefers-reduced-motion). */
+export function Skeleton({ className = '' }: { className?: string }) {
+  return (
+    <div
+      data-testid="skeleton"
+      aria-hidden="true"
+      className={`skeleton-shimmer rounded-md bg-slate-200 dark:bg-slate-700/60 ${className}`}
+    />
+  );
+}
+
+/** Skeleton menyerupai kartu: judul + beberapa baris teks. */
+export function SkeletonCard({ lines = 3 }: { lines?: number }) {
+  return (
+    <div role="status" aria-label="Memuat" className="rounded-xl bg-surface dark:bg-darksurface border border-slate-200 dark:border-slate-700 p-4 shadow-sm shadow-slate-900/5 dark:shadow-black/20 space-y-2">
+      <Skeleton className="h-4 w-1/3" />
+      {Array.from({ length: lines }, (_, i) => (
+        <Skeleton key={i} className={`h-3 ${i === lines - 1 ? 'w-2/3' : 'w-full'}`} />
+      ))}
+    </div>
+  );
+}
+
+/** Skeleton menyerupai daftar baris (mis. daftar proyek/server/database). */
+export function SkeletonRows({ rows = 3 }: { rows?: number }) {
+  return (
+    <div role="status" aria-label="Memuat" className="space-y-2">
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2 space-y-2">
+          <Skeleton className="h-3.5 w-1/2" />
+          <Skeleton className="h-3 w-3/4" />
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export const inputCls =
@@ -48,12 +85,18 @@ export function StatusPill({ status }: { status: string }) {
     error: 'bg-danger/15 text-danger',
     ok: 'bg-success/15 text-success',
     warn: 'bg-warning/15 text-warning',
+    ready: 'bg-success/15 text-success',
+    connected: 'bg-success/15 text-success',
+    disconnected: 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300',
+    available: 'bg-success/15 text-success',
+    unavailable: 'bg-warning/15 text-warning',
   };
   const label: Record<string, string> = {
     running: 'Berjalan', stopped: 'Berhenti', starting: 'Memulai…', stopping: 'Menghentikan…', error: 'Error',
+    ready: 'Siap', connected: 'Terhubung', disconnected: 'Terputus', available: 'Tersedia', unavailable: 'Tidak tersedia',
   };
   return (
-    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${map[status] ?? 'bg-slate-200 text-slate-600'}`}>
+    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${map[status] ?? 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>
       {label[status] ?? status}
     </span>
   );

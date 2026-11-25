@@ -68,7 +68,7 @@ export function PhpManager() {
 
   const textField = (key: 'memory_limit' | 'upload_max_filesize' | 'post_max_size' | 'date_timezone', label: string, placeholder: string) => (
     <label className="block text-sm">
-      <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{label}</span>
+      <span className="text-xs font-medium text-slate-600 dark:text-slate-400">{label}</span>
       <input className={inputCls} placeholder={placeholder} value={form[key]}
         onChange={(e) => setForm({ ...form, [key]: e.target.value })} />
     </label>
@@ -84,7 +84,7 @@ export function PhpManager() {
         ) : !info.data?.available ? (
           <div className="space-y-1">
             <p className="text-sm"><span className="rounded-full bg-warning/15 text-warning px-2 py-0.5 text-xs font-medium">PHP belum tersedia</span></p>
-            <p className="text-sm text-slate-500 dark:text-slate-400">
+            <p className="text-sm text-slate-600 dark:text-slate-400">
               {info.data?.error ?? 'Runtime PHP belum tersedia di perangkat ini. Server PHP akan ditolak Core sampai runtime tersedia.'}
             </p>
           </div>
@@ -94,10 +94,10 @@ export function PhpManager() {
               <span className="rounded-full bg-success/15 text-success px-2 py-0.5 text-xs font-medium">PHP tersedia</span>{' '}
               {info.data.version ? `Versi ${info.data.version}` : 'Versi tidak diketahui'}
             </p>
-            {info.data.binary_path && <p className="text-xs text-slate-500 dark:text-slate-400 break-all">Binary: {info.data.binary_path}</p>}
-            <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Ekstensi terpasang ({info.data.extensions.length})</p>
+            {info.data.binary_path && <p className="text-xs text-slate-600 dark:text-slate-400 break-all">Binary: {info.data.binary_path}</p>}
+            <p className="text-xs font-medium text-slate-600 dark:text-slate-400">Ekstensi terpasang ({info.data.extensions.length})</p>
             {info.data.extensions.length === 0 ? (
-              <p className="text-sm text-slate-500 dark:text-slate-400">Tidak ada ekstensi yang dilaporkan Core.</p>
+              <p className="text-sm text-slate-600 dark:text-slate-400">Tidak ada ekstensi yang dilaporkan Core.</p>
             ) : (
               <div className="flex flex-wrap gap-1.5">
                 {info.data.extensions.map((e) => (
@@ -121,7 +121,7 @@ export function PhpManager() {
             {textField('upload_max_filesize', 'upload_max_filesize', 'mis. 32M')}
             {textField('post_max_size', 'post_max_size', 'mis. 32M')}
             <label className="block text-sm">
-              <span className="text-xs font-medium text-slate-500 dark:text-slate-400">max_execution_time (detik)</span>
+              <span className="text-xs font-medium text-slate-600 dark:text-slate-400">max_execution_time (detik)</span>
               <input className={inputCls} inputMode="numeric" value={String(form.max_execution_time)}
                 onChange={(e) => setForm({ ...form, max_execution_time: Number(e.target.value) || 0 })} />
             </label>
@@ -134,7 +134,7 @@ export function PhpManager() {
             <button type="button" className={btnPrimary} disabled={save.isPending} onClick={() => save.mutate()}>
               {save.isPending ? 'Menyimpan…' : 'Simpan php.ini'}
             </button>
-            <p className="text-xs text-slate-500 dark:text-slate-400">Pengaturan disimpan oleh Core dan dipakai server PHP berikutnya. Server PHP yang sedang berjalan mungkin perlu di-restart.</p>
+            <p className="text-xs text-slate-600 dark:text-slate-400">Pengaturan disimpan oleh Core dan dipakai server PHP berikutnya. Server PHP yang sedang berjalan mungkin perlu di-restart.</p>
           </div>
         )}
       </Card>
@@ -146,15 +146,15 @@ export function PhpManager() {
           <button type="button" className={btnGhost} disabled={!projectId || runCli.isPending} onClick={() => runCli.mutate()}>
             {runCli.isPending ? 'Menjalankan…' : 'Jalankan PHP CLI'}
           </button>
-          {!projectId && <p className="text-xs text-slate-500 dark:text-slate-400">Pilih proyek aktif untuk menjalankan PHP CLI di folder proyek itu.</p>}
+          {!projectId && <p className="text-xs text-slate-600 dark:text-slate-400">Pilih proyek aktif untuk menjalankan PHP CLI di folder proyek itu.</p>}
           {cliResult && (
             <div className="rounded-lg bg-slate-50 dark:bg-darkbg p-2 space-y-1">
-              <p className="text-xs text-slate-500 dark:text-slate-400">
+              <p className="text-xs text-slate-600 dark:text-slate-400">
                 Exit code: {cliResult.exit_code ?? 'tidak ada'}{cliResult.timed_out ? ' · timeout' : ''}
               </p>
               {cliResult.stdout && <pre className="text-xs font-mono whitespace-pre-wrap break-all">{cliResult.stdout}</pre>}
               {cliResult.stderr && <pre className="text-xs font-mono whitespace-pre-wrap break-all text-danger">{cliResult.stderr}</pre>}
-              {!cliResult.stdout && !cliResult.stderr && <p className="text-xs text-slate-500 dark:text-slate-400">Tidak ada output.</p>}
+              {!cliResult.stdout && !cliResult.stderr && <p className="text-xs text-slate-600 dark:text-slate-400">Tidak ada output.</p>}
             </div>
           )}
         </div>
@@ -173,14 +173,14 @@ export function PhpReadiness({ project }: { project: Project }) {
   return (
     <div className="mt-3 rounded-lg bg-slate-50 dark:bg-darkbg p-3 text-sm space-y-1">
       <p className="font-medium">Kesiapan ekstensi PHP ({framework})</p>
-      {info.isLoading ? <p className="text-slate-500 dark:text-slate-400">Memuat info PHP…</p> : info.isError ? (
+      {info.isLoading ? <p className="text-slate-600 dark:text-slate-400">Memuat info PHP…</p> : info.isError ? (
         <p className="text-danger">{info.error instanceof Error ? info.error.message : 'Gagal memuat info PHP.'}</p>
       ) : !info.data?.available ? (
         <p className="text-warning">PHP belum tersedia{info.data?.error ? `: ${info.data.error}` : ''}. Kebutuhan ekstensi belum dapat diverifikasi.</p>
       ) : (() => {
         const reqs = evaluatePhpRequirements(framework, info.data.extensions);
         if (reqs.length === 0) {
-          return <p className="text-slate-500 dark:text-slate-400">Framework ini tidak memiliki daftar ekstensi wajib khusus. PHP {info.data.version ?? ''} tersedia dengan {info.data.extensions.length} ekstensi.</p>;
+          return <p className="text-slate-600 dark:text-slate-400">Framework ini tidak memiliki daftar ekstensi wajib khusus. PHP {info.data.version ?? ''} tersedia dengan {info.data.extensions.length} ekstensi.</p>;
         }
         return (
           <ul className="space-y-1">

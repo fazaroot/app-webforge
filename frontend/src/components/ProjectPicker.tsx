@@ -9,7 +9,7 @@ export function ProjectPicker() {
   const projects = useQuery({ queryKey: ['projects'], queryFn: api.projects });
   return (
     <label className="block">
-      <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Proyek aktif</span>
+      <span className="text-xs font-medium text-slate-600 dark:text-slate-400">Proyek aktif</span>
       <select
         className={inputCls}
         value={activeProjectId ?? ''}

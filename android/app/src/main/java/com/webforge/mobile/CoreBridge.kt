@@ -50,6 +50,9 @@ object CoreBridge {
     external fun nativeSetNativeLibDir(dir: String): Int
 
     @JvmStatic
+    external fun nativeSetContext(context: Context): Int
+
+    @JvmStatic
     external fun nativeStart(dataDir: String, workspaceDir: String, port: Int): Int
 
     @JvmStatic
@@ -70,9 +73,17 @@ object CoreBridge {
     fun start(context: Context): Boolean {
         if (!libraryLoaded) return false
         if (started) return true
+        // Siapkan stdlib Python dan asset runtime sebelum core start agar
+        // deteksi runtime core membaca keadaan nyata. Kegagalan di sini
+        // tidak disembunyikan: core akan melaporkan runtime terkait
+        // tidak tersedia.
+        PythonAssets.ensureStdlib(context)
+        AssetCopier.copyRuntimeAssets(context)
         val rc = try {
-            // Core memakai nativeLibraryDir untuk menemukan libphp.so.
+            // Core memakai nativeLibraryDir untuk menemukan binary bundled.
             nativeSetNativeLibDir(context.applicationInfo.nativeLibraryDir)
+            // Core memakai Context untuk memulai NodeService (:node).
+            nativeSetContext(context.applicationContext)
             nativeStart(dataDir(context).absolutePath, workspaceDir(context).absolutePath, PORT)
         } catch (e: UnsatisfiedLinkError) {
             loadError = e.message

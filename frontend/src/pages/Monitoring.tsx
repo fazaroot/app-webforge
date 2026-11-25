@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api } from '../lib/api';
 import { formatBytes, formatDateTime, formatPercent, formatUptime } from '../lib/format';
-import { Card, EmptyBox, ErrorBox, LoadingBox } from '../components/ui';
+import { Card, EmptyBox, ErrorBox, Skeleton, SkeletonRows } from '../components/ui';
 
 export function Monitoring() {
   const current = useQuery({ queryKey: ['monitoring-current'], queryFn: api.monitoringCurrent, refetchInterval: 5000 });
@@ -19,13 +19,13 @@ export function Monitoring() {
   return (
     <div className="space-y-4">
       <Card title="Kondisi saat ini">
-        {current.isLoading ? <LoadingBox /> : current.isError ? <ErrorBox message="Gagal memuat monitoring." /> : (
+        {current.isLoading ? <SkeletonRows rows={2} /> : current.isError ? <ErrorBox message="Gagal memuat monitoring." /> : (
           <>
             <div className="grid grid-cols-2 gap-3 text-sm">
-              <div><p className="text-xs text-slate-500">CPU</p><p className="font-semibold">{formatPercent(cur?.cpu_percent)}</p></div>
-              <div><p className="text-xs text-slate-500">Memori terpakai</p><p className="font-semibold">{formatBytes(cur?.mem_used_bytes)} / {formatBytes(cur?.mem_total_bytes)}</p></div>
-              <div><p className="text-xs text-slate-500">Penyimpanan terpakai</p><p className="font-semibold">{formatBytes(cur?.storage_used_bytes)} / {formatBytes(cur?.storage_total_bytes)}</p></div>
-              <div><p className="text-xs text-slate-500">Port LISTEN</p><p className="font-semibold">{cur?.ports.length ?? '-'}</p></div>
+              <div><p className="text-xs text-slate-600 dark:text-slate-400">CPU</p><p className="font-semibold">{formatPercent(cur?.cpu_percent)}</p></div>
+              <div><p className="text-xs text-slate-600 dark:text-slate-400">Memori terpakai</p><p className="font-semibold">{formatBytes(cur?.mem_used_bytes)} / {formatBytes(cur?.mem_total_bytes)}</p></div>
+              <div><p className="text-xs text-slate-600 dark:text-slate-400">Penyimpanan terpakai</p><p className="font-semibold">{formatBytes(cur?.storage_used_bytes)} / {formatBytes(cur?.storage_total_bytes)}</p></div>
+              <div><p className="text-xs text-slate-600 dark:text-slate-400">Port LISTEN</p><p className="font-semibold">{cur?.ports.length ?? '-'}</p></div>
             </div>
             {cur?.unavailable_reason && <p className="text-xs text-warning mt-2">{cur.unavailable_reason}</p>}
           </>
@@ -33,7 +33,7 @@ export function Monitoring() {
       </Card>
 
       <Card title="Riwayat (CPU % dan memori MB)">
-        {history.isLoading ? <LoadingBox /> : history.isError ? <ErrorBox message="Gagal memuat riwayat monitoring." /> : chartData.length === 0 ? (
+        {history.isLoading ? <Skeleton className="h-64 w-full" /> : history.isError ? <ErrorBox message="Gagal memuat riwayat monitoring." /> : chartData.length === 0 ? (
           <EmptyBox message="Belum ada sampel riwayat. Sampler mencatat tiap 30 detik." />
         ) : (
           <div className="h-64">
@@ -51,12 +51,12 @@ export function Monitoring() {
           </div>
         )}
         {(history.data?.length ?? 0) > 0 && (
-          <p className="text-xs text-slate-500 mt-1">Sampel terakhir: {formatDateTime(history.data![history.data!.length - 1].recorded_at)}</p>
+          <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">Sampel terakhir: {formatDateTime(history.data![history.data!.length - 1].recorded_at)}</p>
         )}
       </Card>
 
       <Card title="Proses server">
-        {current.isLoading ? <LoadingBox /> : (cur?.processes.length ?? 0) === 0 ? (
+        {current.isLoading ? <SkeletonRows rows={2} /> : (cur?.processes.length ?? 0) === 0 ? (
           <EmptyBox message="Tidak ada proses server yang tercatat." />
         ) : (
           <div className="space-y-1 text-sm">
@@ -68,7 +68,7 @@ export function Monitoring() {
       </Card>
 
       <Card title="Port yang mendengarkan (LISTEN)">
-        {current.isLoading ? <LoadingBox /> : (cur?.ports.length ?? 0) === 0 ? (
+        {current.isLoading ? <SkeletonRows rows={1} /> : (cur?.ports.length ?? 0) === 0 ? (
           <EmptyBox message="Tidak ada port LISTEN yang terdeteksi." />
         ) : (
           <div className="flex flex-wrap gap-1">

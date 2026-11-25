@@ -54,7 +54,7 @@ function TreeNode({ projectId, path, name, depth, onOpen }: { projectId: string;
       </button>
       {expanded && (
         <div>
-          {children.isLoading && <p className="text-xs text-slate-500" style={{ paddingLeft: (depth + 1) * 12 }}>Memuat…</p>}
+          {children.isLoading && <p className="text-xs text-slate-600 dark:text-slate-400" style={{ paddingLeft: (depth + 1) * 12 }}>Memuat…</p>}
           {(children.data ?? []).map((e) => e.is_dir ? (
             <TreeNode key={e.path} projectId={projectId} path={e.path} name={e.name} depth={depth + 1} onOpen={onOpen} />
           ) : (
@@ -216,9 +216,9 @@ export function Editor() {
                 <Save size={14} /> {save.isPending ? 'Menyimpan…' : 'Simpan'}
               </button>
             </div>
-            {findInfo && <p className="text-xs text-slate-500 mb-1">{findInfo}</p>}
+            {findInfo && <p className="text-xs text-slate-600 dark:text-slate-400 mb-1">{findInfo}</p>}
             <div ref={hostRef} className="rounded-lg border border-slate-200 dark:border-slate-700 h-[420px] overflow-hidden bg-white dark:bg-darkbg" />
-            <p className="text-xs text-slate-500 mt-1">Titik (•) berarti ada perubahan belum disimpan. Simpan menulis file nyata lewat API.</p>
+            <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">Titik (•) berarti ada perubahan belum disimpan. Simpan menulis file nyata lewat API.</p>
           </>
         )}
       </Card>

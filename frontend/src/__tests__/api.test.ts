@@ -88,6 +88,53 @@ describe('api client', () => {
     expect(JSON.parse(String(cliInit.body))).toEqual({ args: ['-v'] });
   });
 
+  it('memanggil endpoint server v0.3.0 (config, validasi, reload, python, node) sesuai kontrak', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ ok: true }));
+    vi.stubGlobal('fetch', fetchMock);
+    await api.serverConfig('srv-1');
+    expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toContain('/api/servers/srv-1/config');
+    await api.putServerConfig('srv-1', 'isi konfigurasi');
+    const [putUrl, putInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(putUrl).toContain('/api/servers/srv-1/config');
+    expect(putInit.method).toBe('PUT');
+    expect(JSON.parse(String(putInit.body))).toEqual({ config_text: 'isi konfigurasi' });
+    await api.validateServerConfig('srv-1', 'isi konfigurasi');
+    const [valUrl, valInit] = fetchMock.mock.calls[2] as unknown as [string, RequestInit];
+    expect(valUrl).toContain('/api/servers/srv-1/validate-config');
+    expect(JSON.parse(String(valInit.body))).toEqual({ config_text: 'isi konfigurasi' });
+    await api.reloadServer('srv-1');
+    expect((fetchMock.mock.calls[3] as unknown as [string])[0]).toContain('/api/servers/srv-1/reload');
+    await api.createServer({ project_id: 'p1', engine: 'caddy', port: 8080, bind_lan: false, proxy_port: 3000 });
+    const [, createInit] = fetchMock.mock.calls[4] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(createInit.body))).toEqual({ project_id: 'p1', engine: 'caddy', port: 8080, bind_lan: false, proxy_port: 3000 });
+    await api.pythonInfo();
+    expect((fetchMock.mock.calls[5] as unknown as [string])[0]).toContain('/api/runtimes/python/info');
+    await api.createPythonVenv('p1');
+    expect((fetchMock.mock.calls[6] as unknown as [string])[0]).toContain('/api/projects/p1/python/venv');
+    await api.installPythonDeps('p1');
+    expect((fetchMock.mock.calls[7] as unknown as [string])[0]).toContain('/api/projects/p1/python/install');
+    await api.projectNode('p1');
+    expect((fetchMock.mock.calls[8] as unknown as [string])[0]).toContain('/api/projects/p1/node');
+    await api.installNodeDeps('p1');
+    expect((fetchMock.mock.calls[9] as unknown as [string])[0]).toContain('/api/projects/p1/node/install');
+  });
+
+  it('memanggil endpoint database v0.3.0 (tes koneksi, start/stop, kind eksternal) sesuai kontrak', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ ok: true, message: 'ok' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const body = { name: 'db-jauh', kind: 'external-mysql' as const, host: 'db.contoh.com', port: 3306, username: 'app', password: 'rahasia', database_name: 'app_db' };
+    await api.testDatabaseConnection(body);
+    const [testUrl, testInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(testUrl).toContain('/api/databases/test-connection');
+    expect(JSON.parse(String(testInit.body))).toEqual(body);
+    await api.createDatabase(body);
+    expect((fetchMock.mock.calls[1] as unknown as [string])[0]).toContain('/api/databases');
+    await api.startDatabase('db-1');
+    expect((fetchMock.mock.calls[2] as unknown as [string])[0]).toContain('/api/databases/db-1/start');
+    await api.stopDatabase('db-1');
+    expect((fetchMock.mock.calls[3] as unknown as [string])[0]).toContain('/api/databases/db-1/stop');
+  });
+
   it('menyusun query string untuk daftar file', async () => {
     const fetchMock = vi.fn(async () => jsonResponse([]));
     vi.stubGlobal('fetch', fetchMock);

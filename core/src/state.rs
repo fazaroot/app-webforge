@@ -26,9 +26,30 @@ pub fn native_lib_dir() -> Option<PathBuf> {
         .and_then(|guard| guard.clone())
 }
 
+/// Data dir core, diisi saat core start. Dipakai deteksi runtime untuk
+/// membaca file versi/asset yang disalin Kotlin (mis. node-version.txt).
+static DATA_DIR: OnceLock<std::sync::Mutex<Option<PathBuf>>> = OnceLock::new();
+
+pub fn set_data_dir(dir: PathBuf) {
+    let slot = DATA_DIR.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(mut guard) = slot.lock() {
+        *guard = Some(dir);
+    }
+}
+
+pub fn data_dir() -> Option<PathBuf> {
+    DATA_DIR
+        .get()
+        .and_then(|slot| slot.lock().ok())
+        .and_then(|guard| guard.clone())
+}
+
 pub enum ProcessHandle {
     Child(Arc<Mutex<Option<Child>>>),
     InProcess(tokio::task::AbortHandle),
+    /// Server Node di proses Android :node; AbortHandle adalah watcher
+    /// core (tail log + auto-restart), prosesnya dihentikan lewat JNI.
+    Node(tokio::task::AbortHandle),
 }
 
 #[derive(Clone)]
