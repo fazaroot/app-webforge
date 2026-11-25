@@ -169,7 +169,6 @@ COMMON_CMAKE_ARGS=(
   -DWITH_UNIT_TESTS=OFF
   -DWITH_EMBEDDED_SERVER=OFF
   -DWITH_SYSTEMD=no
-  -DWITH_PCRE=system
   -DPLUGIN_AUTH_SOCKET=NO
   -DPLUGIN_AUTH_PAM=NO
   -DPLUGIN_AUTH_ED25519=NO
@@ -198,6 +197,7 @@ if [ ! -f "$HOST_BUILD/import_executables.cmake" ]; then
       -DCMAKE_CXX_FLAGS="-Wno-error=incompatible-pointer-types" \
       "${COMMON_CMAKE_ARGS[@]}" \
       -DWITH_SSL=system \
+      -DWITH_PCRE=bundled \
       -DWITH_ZLIB=bundled
     cmake --build "$HOST_BUILD" -j"$(nproc)" --target comp_err gen_lex_hash comp_sql gen_lex_token
   )
@@ -277,6 +277,7 @@ cmake -S "$MARIADB_SRC" -B "$TARGET_BUILD" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DHAVE_LIBRESSL=FALSE \
   -DLIBRESSL_RESULT=1 \
   -DWITH_ZLIB=system \
+  -DWITH_PCRE=system \
   -DWITH_WSREP=OFF \
   -DZLIB_ROOT="$PREFIX" \
   -DSTACK_DIRECTION=-1 \
