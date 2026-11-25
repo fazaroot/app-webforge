@@ -99,18 +99,25 @@ pub async fn create_server(
     Json(body): Json<CreateServer>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let project = super::projects::get_project_row(&state.pool, &body.project_id).await?;
-    if body.engine != "static" {
+    if body.engine == "php" {
+        if crate::php::find_php_binary(state.native_lib_dir.as_deref()).is_none() {
+            return Err(ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "PHP tidak tersedia: libphp.so tidak ditemukan di nativeLibraryDir dan php tidak ada di PATH",
+            ));
+        }
+    } else if body.engine != "static" {
         let runtimes = crate::runtime::detect_runtimes().await;
         let available = runtimes.iter().any(|r| r.id == body.engine && r.available);
         if !available {
             return Err(ApiError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
-                format!("Runtime {} belum tersedia di Phase 1", body.engine),
+                format!("Runtime {} belum tersedia", body.engine),
             ));
         }
         return Err(ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
-            format!("Runtime {} belum didukung sebagai engine server di Phase 1", body.engine),
+            format!("Runtime {} terdeteksi tetapi belum didukung sebagai engine server", body.engine),
         ));
     }
     if !(1024..=65535).contains(&body.port) {

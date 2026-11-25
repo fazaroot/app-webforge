@@ -13,9 +13,11 @@ pub struct RuntimeInfo {
     pub source: String,
 }
 
-const REASON: &str = "Belum dibundel di Phase 1 — lihat docs/RUNTIME_PLAN.md";
+const REASON: &str = "Belum dibundel — lihat docs/RUNTIME_PLAN.md";
+const REASON_PHP: &str =
+    "Binary PHP tidak ditemukan: libphp.so tidak ada di nativeLibraryDir dan php tidak ada di PATH";
 
-fn find_in_path(bin: &str) -> Option<PathBuf> {
+pub(crate) fn find_in_path(bin: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         let cand = dir.join(bin);
@@ -59,7 +61,39 @@ async fn binary_version(path: &PathBuf) -> Option<String> {
     }
 }
 
+async fn php_runtime_info(native_lib_dir: Option<&std::path::Path>) -> RuntimeInfo {
+    match crate::php::find_php_binary(native_lib_dir) {
+        Some(path) => {
+            let info = crate::php::probe_php_info(Some(path.clone())).await;
+            RuntimeInfo {
+                id: "php".to_string(),
+                name: "PHP".to_string(),
+                available: info.available,
+                version: info.version,
+                reason: info.error,
+                source: if crate::php::is_bundled_php(&path, native_lib_dir) {
+                    "bundled".to_string()
+                } else {
+                    "path".to_string()
+                },
+            }
+        }
+        None => RuntimeInfo {
+            id: "php".to_string(),
+            name: "PHP".to_string(),
+            available: false,
+            version: None,
+            reason: Some(REASON_PHP.to_string()),
+            source: "none".to_string(),
+        },
+    }
+}
+
 pub async fn detect_runtimes() -> Vec<RuntimeInfo> {
+    detect_runtimes_with(crate::state::native_lib_dir()).await
+}
+
+pub async fn detect_runtimes_with(native_lib_dir: Option<PathBuf>) -> Vec<RuntimeInfo> {
     let mut out = vec![RuntimeInfo {
         id: "static".to_string(),
         name: "WebForge Static Server".to_string(),
@@ -68,8 +102,8 @@ pub async fn detect_runtimes() -> Vec<RuntimeInfo> {
         reason: None,
         source: "bundled".to_string(),
     }];
-    let defs: [(&str, &str, &[&str]); 7] = [
-        ("php", "PHP", &["php"]),
+    out.push(php_runtime_info(native_lib_dir.as_deref()).await);
+    let defs: [(&str, &str, &[&str]); 6] = [
         ("nginx", "Nginx", &["nginx"]),
         ("apache", "Apache", &["apache2", "httpd"]),
         ("python", "Python", &["python3", "python"]),

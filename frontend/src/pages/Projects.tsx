@@ -5,6 +5,7 @@ import { api, isNativeWebForge, pickDirectory } from '../lib/api';
 import type { Project } from '../lib/types';
 import { formatDateTime } from '../lib/format';
 import { Card, EmptyBox, ErrorBox, LoadingBox, btnDanger, btnGhost, btnPrimary, inputCls } from '../components/ui';
+import { PhpReadiness } from '../components/PhpManager';
 import { useAppStore } from '../store';
 
 // Harus sama persis dengan core/src/templates.rs (TEMPLATES).
@@ -139,6 +140,7 @@ export function Projects() {
               {selected.framework.notes.map((n) => <p key={n} className="text-warning text-xs">{n}</p>)}
             </div>
           ) : <p className="text-sm text-slate-500 mt-2">Framework belum terdeteksi. Jalankan scan.</p>}
+          <PhpReadiness project={selected} />
           <div className="flex flex-wrap gap-2 mt-3">
             <button type="button" className={btnGhost} disabled={scan.isPending} onClick={() => scan.mutate(selected.id)}>
               <RefreshCw size={15} /> {scan.isPending ? 'Memindai…' : 'Scan ulang'}

@@ -10,6 +10,7 @@ import java.net.Socket
  *
  * Tanda tangan external fun di bawah HARUS cocok 1:1 dengan ekspor JNI di
  * core/src/jni_bridge.rs:
+ *   Java_com_webforge_mobile_CoreBridge_nativeSetNativeLibDir(JNIEnv, JClass, JString) -> jint
  *   Java_com_webforge_mobile_CoreBridge_nativeStart(JNIEnv, JClass, JString, JString, jint) -> jint
  *   Java_com_webforge_mobile_CoreBridge_nativeStop(JNIEnv, JClass) -> jint
  *   Java_com_webforge_mobile_CoreBridge_nativeGetToken(JNIEnv, JClass) -> jstring
@@ -46,6 +47,9 @@ object CoreBridge {
     }
 
     @JvmStatic
+    external fun nativeSetNativeLibDir(dir: String): Int
+
+    @JvmStatic
     external fun nativeStart(dataDir: String, workspaceDir: String, port: Int): Int
 
     @JvmStatic
@@ -67,6 +71,8 @@ object CoreBridge {
         if (!libraryLoaded) return false
         if (started) return true
         val rc = try {
+            // Core memakai nativeLibraryDir untuk menemukan libphp.so.
+            nativeSetNativeLibDir(context.applicationInfo.nativeLibraryDir)
             nativeStart(dataDir(context).absolutePath, workspaceDir(context).absolutePath, PORT)
         } catch (e: UnsatisfiedLinkError) {
             loadError = e.message

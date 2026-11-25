@@ -3,12 +3,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Play, RotateCw, Square, Trash2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { formatDateTime, formatUptime } from '../lib/format';
+import { isPhpProject } from '../lib/php';
 import { Card, EmptyBox, ErrorBox, LoadingBox, StatusPill, btnGhost, btnPrimary, inputCls } from '../components/ui';
 import { RuntimeBadge } from '../components/RuntimeBadge';
+import { PhpManager } from '../components/PhpManager';
 
 export function Servers() {
   const qc = useQueryClient();
   const [projectId, setProjectId] = useState('');
+  const [engine, setEngine] = useState<'static' | 'php'>('static');
   const [port, setPort] = useState('8080');
   const [bindLan, setBindLan] = useState(false);
   const [docRoot, setDocRoot] = useState('');
@@ -28,9 +31,24 @@ export function Servers() {
   const invalidate = () => { void qc.invalidateQueries({ queryKey: ['servers'] }); };
   const onErr = (e: unknown) => setFormError(e instanceof Error ? e.message : 'Operasi gagal');
 
+  const selectedProject = (projects.data ?? []).find((p) => p.id === projectId) ?? null;
+  const selectedIsPhp = isPhpProject(selectedProject);
+
+  function onProjectChange(id: string) {
+    setProjectId(id);
+    const p = (projects.data ?? []).find((x) => x.id === id) ?? null;
+    if (isPhpProject(p)) {
+      setEngine('php');
+      setDocRoot(p?.framework?.recommended_document_root ?? '');
+    } else {
+      setEngine('static');
+      setDocRoot('');
+    }
+  }
+
   const create = useMutation({
     mutationFn: () => api.createServer({
-      project_id: projectId, engine: 'static', port: Number(port), bind_lan: bindLan,
+      project_id: projectId, engine, port: Number(port), bind_lan: bindLan,
       document_root: docRoot.trim() || undefined,
     }),
     onSuccess: () => { setFormError(''); invalidate(); },
@@ -55,15 +73,29 @@ export function Servers() {
     <div className="space-y-4">
       {formError && <ErrorBox message={formError} />}
 
-      <Card title="Buat server static">
+      <Card title="Buat server">
         <div className="space-y-2">
-          <select className={inputCls} value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+          <select className={inputCls} value={projectId} onChange={(e) => onProjectChange(e.target.value)}>
             <option value="">— Pilih proyek —</option>
             {(projects.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
+          {selectedIsPhp ? (
+            <label className="block text-sm">
+              <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Engine</span>
+              <select className={inputCls} value={engine} onChange={(e) => setEngine(e.target.value as 'static' | 'php')}>
+                <option value="php">PHP built-in server</option>
+                <option value="static">WebForge Static Server</option>
+              </select>
+            </label>
+          ) : selectedProject ? (
+            <p className="text-xs text-slate-500 dark:text-slate-400">Engine: WebForge Static Server (proyek ini terdeteksi bukan PHP).</p>
+          ) : null}
           <input className={inputCls} inputMode="numeric" placeholder="Port (1024–65535)" value={port} onChange={(e) => setPort(e.target.value)} />
           {!portValid && port !== '' && <p className="text-xs text-danger">Port harus bilangan 1024–65535.</p>}
           <input className={inputCls} placeholder="Document root relatif (opsional, mis. public)" value={docRoot} onChange={(e) => setDocRoot(e.target.value)} />
+          {selectedIsPhp && selectedProject?.framework && (
+            <p className="text-xs text-slate-500 dark:text-slate-400">Rekomendasi deteksi {selectedProject.framework.framework}: document root <span className="font-mono">{selectedProject.framework.recommended_document_root}</span>.</p>
+          )}
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-0.5" checked={bindLan} onChange={(e) => setBindLan(e.target.checked)} />
             <span>Buka akses LAN (bind 0.0.0.0)</span>
@@ -77,13 +109,13 @@ export function Servers() {
           <button type="button" className={btnPrimary} disabled={!projectId || !portValid || create.isPending} onClick={() => create.mutate()}>
             {create.isPending ? 'Membuat…' : 'Buat server'}
           </button>
-          <p className="text-xs text-slate-500">Engine Phase 1: WebForge Static Server. Runtime lain belum tersedia (lihat daftar di bawah).</p>
+          <p className="text-xs text-slate-500">Proyek PHP dapat memakai PHP built-in server. Bila runtime PHP belum tersedia, Core menolak pembuatan server dan pesan errornya ditampilkan apa adanya di atas.</p>
         </div>
       </Card>
 
       <Card title="Server">
         {servers.isLoading ? <LoadingBox /> : servers.isError ? <ErrorBox message="Gagal memuat server." /> : (servers.data?.length ?? 0) === 0 ? (
-          <EmptyBox message="Belum ada server. Buat server static dari proyek di atas." />
+          <EmptyBox message="Belum ada server. Buat server dari proyek di atas." />
         ) : (
           <div className="space-y-3">
             {servers.data!.map((s) => (
@@ -143,8 +175,10 @@ export function Servers() {
         {runtimes.isLoading ? <LoadingBox /> : runtimes.isError ? <ErrorBox message="Gagal memuat runtime." /> : (
           <div className="space-y-2">{(runtimes.data ?? []).map((r) => <RuntimeBadge key={r.id} runtime={r} />)}</div>
         )}
-        <p className="text-xs text-slate-500 mt-2">Runtime yang belum tersedia tidak dapat dijalankan di Phase 1 dan tidak ditampilkan tombol start.</p>
+        <p className="text-xs text-slate-500 mt-2">Runtime yang belum tersedia tidak dapat dijalankan dan tidak ditampilkan tombol start.</p>
       </Card>
+
+      <PhpManager />
     </div>
   );
 }

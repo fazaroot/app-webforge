@@ -3,12 +3,14 @@
 Lingkungan server web dan pengembangan yang berjalan **langsung di HP Android**, tanpa root dan tanpa PC. WebForge Mobile membundel core Rust di dalam aplikasi Android (lewat JNI), menyajikan antarmuka React di WebView Capacitor, dan mengelola proyek web yang tersimpan di workspace milik aplikasi.
 
 - **Application ID:** `com.webforge.mobile`
-- **Versi Phase 1:** `0.1.0`
+- **Versi:** `0.2.0` (Phase 1 + anti-stuck + bundle PHP)
 - **Platform:** Android `minSdk 26` (Android 8.0), `targetSdk 35`, fokus ARM64 (`arm64-v8a`)
 - **Perangkat uji utama:** Xiaomi POCO M6 (ARM64)
 - **Build:** GitHub Actions (APK debug), tanpa Android Studio lokal
 
-> **Status jujur Phase 1:** yang benar-benar berjalan adalah **static server Rust**, deteksi framework, file manager, SQLite manager, terminal terbatas, monitoring `/proc`, logs, dan diagnostics. Runtime PHP, Nginx, Apache, Python, Node.js, MariaDB, dan PostgreSQL **belum dibundel** — aplikasi menampilkannya sebagai "Belum tersedia" beserta alasannya, bukan sebagai tombol mati. Rencana bundelnya ada di [docs/RUNTIME_PLAN.md](docs/RUNTIME_PLAN.md), dan matriks lengkapnya di [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+> **Status jujur v0.2.0:** yang berjalan adalah **static server Rust**, deteksi framework, file manager, SQLite manager, terminal terbatas, monitoring `/proc`, logs, dan diagnostics. **PHP 8.3 kini dibundel** (`libphp.so` hasil cross-compile CI) dengan engine `php -S`, php.ini terkelola, PHP info, dan CLI runner — statusnya "terbuild di CI, menunggu tes perangkat" sampai terverifikasi di POCO M6. Runtime Nginx, Apache, Python, Node.js, MariaDB, dan PostgreSQL **belum dibundel** — aplikasi menampilkannya sebagai "Belum tersedia" beserta alasannya, bukan sebagai tombol mati. Rencana bundelnya ada di [docs/RUNTIME_PLAN.md](docs/RUNTIME_PLAN.md), dan matriks lengkapnya di [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+>
+> **Perbaikan anti-stuck v0.2.0:** laporan tes perangkat v0.1.0 menunjukkan server stuck saat aplikasi di background (CPU suspend). v0.2.0 menambahkan partial WakeLock selama ada server running (bisa dimatikan di Pengaturan), watchdog yang me-restart core yang mati, auto-restart server yang crash, dan tombol permintaan pengecualian optimasi baterai. Cara mengetes: start server, kunci layar beberapa menit, lalu refresh URL server dari browser/perangkat lain tanpa membuka aplikasi — halaman harus tetap merespons. Di HyperOS tetap aktifkan Autostart dan baterai "Tanpa batasan" secara manual; aplikasi tidak bisa mengubah pengaturan itu sendiri.
 
 ## Fitur Phase 1 yang nyata
 

@@ -16,6 +16,23 @@ fn core_slot() -> &'static Mutex<Option<RunningCore>> {
     CORE.get_or_init(|| Mutex::new(None))
 }
 
+/// Simpan nativeLibraryDir Android ke state core agar deteksi PHP
+/// menemukan libphp.so. Dipanggil Kotlin sebelum nativeStart.
+/// Mengembalikan 0 bila sukses, -1 bila string tidak terbaca.
+#[no_mangle]
+pub extern "system" fn Java_com_webforge_mobile_CoreBridge_nativeSetNativeLibDir(
+    mut env: JNIEnv,
+    _class: JClass,
+    dir: JString,
+) -> jint {
+    let dir: String = match env.get_string(&dir) {
+        Ok(s) => s.into(),
+        Err(_) => return -1,
+    };
+    crate::state::set_native_lib_dir(std::path::PathBuf::from(dir));
+    0
+}
+
 #[no_mangle]
 pub extern "system" fn Java_com_webforge_mobile_CoreBridge_nativeStart(
     mut env: JNIEnv,

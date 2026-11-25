@@ -24,3 +24,7 @@ export interface LogEntry { id: string; category: string; severity: string; mess
 export interface GitStatus { available: boolean; reason: string | null; branch: string | null; clean: boolean; entries: string[] }
 export interface SecurityStatus { api_token_set: boolean; management_bind: string; lan_servers: number; warnings: string[] }
 export type SettingsMap = Record<string, unknown>;
+export interface PhpRuntimeInfo { available: boolean; version: string | null; extensions: string[]; binary_path: string | null; error: string | null }
+export interface PhpSettings { memory_limit: string; upload_max_filesize: string; post_max_size: string; max_execution_time: number; date_timezone: string; display_errors: boolean }
+export interface PhpCliResult { exit_code: number | null; stdout: string; stderr: string; timed_out: boolean }
+export interface PowerStatus { ignoringBatteryOptimizations: boolean; keepCpuAwake: boolean }

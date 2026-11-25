@@ -2,10 +2,29 @@ use crate::config::Config;
 use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 use tokio::process::Child;
 use tokio::sync::Mutex;
+
+/// Path nativeLibraryDir Android, diisi lewat JNI nativeSetNativeLibDir
+/// sebelum core start. Di host/test tetap None (deteksi PHP memakai PATH).
+static NATIVE_LIB_DIR: OnceLock<std::sync::Mutex<Option<PathBuf>>> = OnceLock::new();
+
+pub fn set_native_lib_dir(dir: PathBuf) {
+    let slot = NATIVE_LIB_DIR.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(mut guard) = slot.lock() {
+        *guard = Some(dir);
+    }
+}
+
+pub fn native_lib_dir() -> Option<PathBuf> {
+    NATIVE_LIB_DIR
+        .get()
+        .and_then(|slot| slot.lock().ok())
+        .and_then(|guard| guard.clone())
+}
 
 pub enum ProcessHandle {
     Child(Arc<Mutex<Option<Child>>>),
@@ -19,6 +38,8 @@ pub struct AppState {
     pub started_at: DateTime<Utc>,
     pub started_instant: Instant,
     pub processes: Arc<Mutex<HashMap<String, ProcessHandle>>>,
+    pub native_lib_dir: Option<PathBuf>,
+    pub php_info_cache: Arc<Mutex<Option<(Instant, crate::php::PhpInfo)>>>,
 }
 
 impl AppState {

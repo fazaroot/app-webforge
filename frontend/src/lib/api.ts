@@ -2,6 +2,7 @@ import { Capacitor, registerPlugin } from '@capacitor/core';
 import type {
   BackupResult, DatabaseInfo, Diagnostics, DirSize, FileEntry, FileRead, FileSearchHit,
   FrameworkInfo, GitStatus, Health, LogEntry, MonitoringCurrent, MonitoringPoint, NetworkInfo,
+  PhpCliResult, PhpRuntimeInfo, PhpSettings, PowerStatus,
   Project, QueryResult, RuntimeInfo, SecurityStatus, ServerInstance, ServerLog, SettingsMap,
   SystemInfo, TableInfo, TerminalHistoryItem, TerminalResult,
 } from './types';
@@ -20,6 +21,9 @@ interface WebForgePlugin {
   stopCore(): Promise<Record<string, unknown>>;
   pickDirectory(): Promise<PickDirectoryResult>;
   openBatterySettings(): Promise<{ opened: boolean }>;
+  setKeepCpuAwake(options: { enabled: boolean }): Promise<{ keepCpuAwake: boolean }>;
+  getPowerStatus(): Promise<PowerStatus>;
+  requestIgnoreBatteryOptimizations(): Promise<{ ignoringBatteryOptimizations: boolean }>;
 }
 
 declare global {
@@ -95,6 +99,30 @@ export async function openBatterySettings(): Promise<void> {
     throw new Error('Pengaturan baterai hanya tersedia di aplikasi Android.');
   }
   await plugin.openBatterySettings();
+}
+
+/** Status daya nyata dari plugin native: pengecualian baterai dan WakeLock CPU. */
+export async function getPowerStatus(): Promise<PowerStatus> {
+  if (!isNativeWebForge() || !plugin) {
+    throw new Error('Status daya hanya tersedia di aplikasi Android.');
+  }
+  return plugin.getPowerStatus();
+}
+
+/** Mengaktifkan/menonaktifkan WakeLock CPU selama server berjalan. */
+export async function setKeepCpuAwake(enabled: boolean): Promise<{ keepCpuAwake: boolean }> {
+  if (!isNativeWebForge() || !plugin) {
+    throw new Error('WakeLock CPU hanya tersedia di aplikasi Android.');
+  }
+  return plugin.setKeepCpuAwake({ enabled });
+}
+
+/** Meminta dialog sistem Android untuk pengecualian optimasi baterai. */
+export async function requestIgnoreBatteryOptimizations(): Promise<{ ignoringBatteryOptimizations: boolean }> {
+  if (!isNativeWebForge() || !plugin) {
+    throw new Error('Pengecualian optimasi baterai hanya tersedia di aplikasi Android.');
+  }
+  return plugin.requestIgnoreBatteryOptimizations();
 }
 
 export class ApiError extends Error {
@@ -204,6 +232,13 @@ export const api = {
   settings: () => request<SettingsMap>('/api/settings'),
   putSettings: (values: SettingsMap) => request<SettingsMap>('/api/settings', { method: 'PUT', body: JSON.stringify(values) }),
   securityStatus: () => request<SecurityStatus>('/api/security/status'),
+
+  phpInfo: () => request<PhpRuntimeInfo>('/api/runtimes/php/info'),
+  phpSettings: () => request<PhpSettings>('/api/php/settings'),
+  putPhpSettings: (values: PhpSettings) =>
+    request<PhpSettings>('/api/php/settings', { method: 'PUT', body: JSON.stringify(values) }),
+  phpCli: (projectId: string, args: string[]) =>
+    request<PhpCliResult>(`/api/projects/${projectId}/php-cli`, { method: 'POST', body: JSON.stringify({ args }) }),
 };
 
 export async function terminalWsUrl(): Promise<string> {

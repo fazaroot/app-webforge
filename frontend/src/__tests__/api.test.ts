@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, ApiError, isNativeWebForge, openBatterySettings, pickDirectory, resetApiConfigCache } from '../lib/api';
+import {
+  api, ApiError, getPowerStatus, isNativeWebForge, openBatterySettings, pickDirectory,
+  requestIgnoreBatteryOptimizations, resetApiConfigCache, setKeepCpuAwake,
+} from '../lib/api';
 
 function jsonResponse(body: unknown, ok = true, status = 200): Response {
   return {
@@ -60,6 +63,29 @@ describe('api client', () => {
     expect(isNativeWebForge()).toBe(false);
     await expect(pickDirectory()).rejects.toThrow('hanya tersedia di aplikasi Android');
     await expect(openBatterySettings()).rejects.toThrow('hanya tersedia di aplikasi Android');
+    await expect(getPowerStatus()).rejects.toThrow('hanya tersedia di aplikasi Android');
+    await expect(setKeepCpuAwake(true)).rejects.toThrow('hanya tersedia di aplikasi Android');
+    await expect(requestIgnoreBatteryOptimizations()).rejects.toThrow('hanya tersedia di aplikasi Android');
+  });
+
+  it('memanggil endpoint PHP sesuai kontrak', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ ok: true }));
+    vi.stubGlobal('fetch', fetchMock);
+    await api.phpInfo();
+    expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toContain('/api/runtimes/php/info');
+    const settings = {
+      memory_limit: '256M', upload_max_filesize: '32M', post_max_size: '32M',
+      max_execution_time: 60, date_timezone: 'Asia/Jakarta', display_errors: true,
+    };
+    await api.putPhpSettings(settings);
+    const [putUrl, putInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(putUrl).toContain('/api/php/settings');
+    expect(putInit.method).toBe('PUT');
+    expect(JSON.parse(String(putInit.body))).toEqual(settings);
+    await api.phpCli('proj-1', ['-v']);
+    const [cliUrl, cliInit] = fetchMock.mock.calls[2] as unknown as [string, RequestInit];
+    expect(cliUrl).toContain('/api/projects/proj-1/php-cli');
+    expect(JSON.parse(String(cliInit.body))).toEqual({ args: ['-v'] });
   });
 
   it('menyusun query string untuk daftar file', async () => {

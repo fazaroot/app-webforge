@@ -8,8 +8,8 @@ android {
         applicationId "com.webforge.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "0.1.0"
+        versionCode 2
+        versionName "0.2.0"
         // Rust core hanya dibuild untuk ARM64 (lihat CI). ABI lain tidak
         // diklaim didukung.
         ndk {
@@ -34,6 +34,14 @@ android {
     }
     kotlinOptions {
         jvmTarget = '21'
+    }
+    // libphp.so dieksekusi sebagai binary dari nativeLibraryDir, jadi
+    // native lib harus diekstrak menjadi file nyata (bukan dimuat
+    // langsung dari APK). Pasangan android:extractNativeLibs="true".
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 }
 

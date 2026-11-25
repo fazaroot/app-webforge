@@ -1,5 +1,6 @@
 pub mod databases;
 pub mod files;
+pub mod php;
 pub mod projects;
 pub mod servers;
 pub mod system;
@@ -59,6 +60,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/system/info", get(system::system_info))
         .route("/api/system/diagnostics", get(system::diagnostics))
         .route("/api/runtimes", get(system::runtimes))
+        .route("/api/runtimes/php/info", get(php::php_info))
+        .route("/api/php/settings", get(php::get_php_settings).put(php::put_php_settings))
+        .route("/api/projects/:id/php-cli", post(php::php_cli))
         .route("/api/projects", get(projects::list_projects).post(projects::create_project))
         .route("/api/projects/register", post(projects::register_project))
         .route("/api/projects/:id", get(projects::get_project).delete(projects::delete_project))

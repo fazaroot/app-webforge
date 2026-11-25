@@ -1,10 +1,22 @@
-# WebForge Mobile CI — Rust core + frontend + APK debug (Capacitor)
+# WebForge Mobile CI — Rust core + frontend + PHP bundle + APK debug (Capacitor)
 #
 # Catatan:
 # - TIDAK memakai android-actions/setup-android (pernah gagal di TeleCore).
 #   Runner ubuntu-latest sudah menyediakan Android SDK + NDK.
 # - libwebforge_core.so dihasilkan cargo-ndk di job android dan tidak
 #   pernah di-commit.
+# - libphp.so (PHP 8.3 CLI) di-cross-compile di job build-php untuk
+#   aarch64-linux-android (API 26) dan tidak pernah di-commit. Ekstensi
+#   target: bcmath, ctype, dom, fileinfo, filter, hash, json, mbstring,
+#   openssl, pdo, pdo_sqlite, phar, posix, session, simplexml, sockets,
+#   sqlite3, tokenizer, xml, xmlreader, xmlwriter, zip, zlib.
+#   Dependensi dibangun statis dari source: SQLite (amalgamation),
+#   libxml2 (cmake, tanpa iconv), OpenSSL, Oniguruma, libzip; zlib dari
+#   sysroot NDK. Bila sebagian ekstensi terbukti tidak bisa dikompilasi
+#   untuk Android, daftar di atas harus dikurangi di sini DAN di key
+#   cache build-php, lalu dilaporkan apa adanya — jangan klaim ekstensi
+#   yang tidak benar-benar terbuild. Daftar nyata di perangkat berasal
+#   dari `php -m` lewat endpoint /api/runtimes/php/info.
 # - Belum ada job release APK: signing belum dikonfigurasi.
 
 name: WebForge Mobile CI
@@ -82,9 +94,265 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+  build-php:
+    name: PHP 8.3 (Android arm64)
+    runs-on: ubuntu-latest
+    env:
+      PHP_VERSION: "8.3.14"
+      LIBXML2_VERSION: "2.12.9"
+      OPENSSL_VERSION: "3.3.2"
+      ONIGURUMA_VERSION: "6.9.9"
+      SQLITE_VERSION: "3.46.1"
+      SQLITE_AMALGAMATION: "3460100"
+      LIBZIP_VERSION: "1.10.1"
+      ANDROID_API: "26"
+      PREFIX: ${{ github.workspace }}/php-prefix
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Locate Android NDK & setup toolchain
+        run: |
+          if [ -z "$ANDROID_NDK_HOME" ]; then
+            NDK_DIR=$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)
+            if [ -z "$NDK_DIR" ]; then
+              echo "::error::Android NDK tidak ditemukan di $ANDROID_HOME/ndk"
+              exit 1
+            fi
+            echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          fi
+          NDK="${ANDROID_NDK_HOME:-$NDK_DIR}"
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          mkdir -p "$GITHUB_WORKSPACE/toolchain-shim"
+          ln -sf "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang" "$GITHUB_WORKSPACE/toolchain-shim/aarch64-linux-android-clang"
+          ln -sf "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang++" "$GITHUB_WORKSPACE/toolchain-shim/aarch64-linux-android-clang++"
+          echo "$GITHUB_WORKSPACE/toolchain-shim" >> "$GITHUB_PATH"
+          echo "$TOOLCHAIN/bin" >> "$GITHUB_PATH"
+          {
+            echo "CC=aarch64-linux-android-clang"
+            echo "CXX=aarch64-linux-android-clang++"
+            echo "AR=llvm-ar"
+            echo "RANLIB=llvm-ranlib"
+            echo "STRIP=llvm-strip"
+            echo "ANDROID_NDK_ROOT=$NDK"
+          } >> "$GITHUB_ENV"
+          "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang" --version
+
+      - name: Cache PHP build
+        id: php-cache
+        uses: actions/cache@v4
+        with:
+          path: php-out
+          key: php-8.3.14-android26-arm64-bcmath-ctype-dom-fileinfo-filter-hash-json-mbstring-openssl-pdo-pdo_sqlite-phar-posix-session-simplexml-sockets-sqlite3-tokenizer-xml-xmlreader-xmlwriter-zip-zlib
+
+      - name: Build SQLite (amalgamation, static)
+        if: steps.php-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$PREFIX/lib/pkgconfig" "$PREFIX/include" php-src
+          cd php-src
+          curl -fsSL -o sqlite.zip "https://www.sqlite.org/2024/sqlite-amalgamation-${SQLITE_AMALGAMATION}.zip"
+          unzip -q sqlite.zip
+          cd "sqlite-amalgamation-${SQLITE_AMALGAMATION}"
+          $CC -O2 -fPIC -DSQLITE_THREADSAFE=1 -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_ENABLE_FTS4 -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_RTREE \
+            -c sqlite3.c -o sqlite3.o
+          $AR rcs "$PREFIX/lib/libsqlite3.a" sqlite3.o
+          cp sqlite3.h sqlite3ext.h "$PREFIX/include/"
+          cat > "$PREFIX/lib/pkgconfig/sqlite3.pc" <<EOF
+          prefix=$PREFIX
+          exec_prefix=\${prefix}
+          libdir=\${exec_prefix}/lib
+          includedir=\${prefix}/include
+
+          Name: SQLite
+          Description: SQL database engine
+          Version: $SQLITE_VERSION
+          Libs: -L\${libdir} -lsqlite3
+          Libs.private: -lm -ldl
+          Cflags: -I\${includedir}
+          EOF
+
+      - name: Build libxml2 (static, tanpa iconv)
+        if: steps.php-cache.outputs.cache-hit != 'true'
+        run: |
+          cd php-src
+          curl -fsSL -o libxml2.tar.xz "https://download.gnome.org/sources/libxml2/2.12/libxml2-${LIBXML2_VERSION}.tar.xz"
+          tar xf libxml2.tar.xz
+          cmake -S "libxml2-${LIBXML2_VERSION}" -B libxml2-build \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+            -DLIBXML2_WITH_ICONV=OFF \
+            -DLIBXML2_WITH_PYTHON=OFF \
+            -DLIBXML2_WITH_LZMA=OFF \
+            -DLIBXML2_WITH_ZLIB=ON \
+            -DLIBXML2_WITH_THREADS=ON \
+            -DLIBXML2_WITH_HTTP=OFF \
+            -DLIBXML2_WITH_FTP=OFF \
+            -DLIBXML2_WITH_TESTS=OFF
+          cmake --build libxml2-build -j"$(nproc)"
+          cmake --install libxml2-build
+          if [ ! -f "$PREFIX/lib/pkgconfig/libxml-2.0.pc" ]; then
+            echo "libxml-2.0.pc tidak terinstall; menulis pkgconfig manual"
+            mkdir -p "$PREFIX/lib/pkgconfig"
+            cat > "$PREFIX/lib/pkgconfig/libxml-2.0.pc" <<EOF
+          prefix=$PREFIX
+          exec_prefix=\${prefix}
+          libdir=\${exec_prefix}/lib
+          includedir=\${prefix}/include
+
+          Name: libXML
+          Description: libXML library version2.
+          Version: $LIBXML2_VERSION
+          Libs: -L\${libdir} -lxml2
+          Libs.private: -lz -lm -ldl
+          Cflags: -I\${includedir}/libxml2
+          EOF
+          fi
+
+      - name: Build OpenSSL (static)
+        if: steps.php-cache.outputs.cache-hit != 'true'
+        run: |
+          cd php-src
+          curl -fsSL -o openssl.tar.gz "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
+          tar xf openssl.tar.gz
+          cd "openssl-${OPENSSL_VERSION}"
+          ./Configure android-arm64 "-D__ANDROID_API__=${ANDROID_API}" \
+            no-shared no-tests no-docs \
+            --prefix="$PREFIX" --openssldir="$PREFIX/ssl"
+          make -j"$(nproc)" build_sw
+          make install_sw
+
+      - name: Build Oniguruma (static)
+        if: steps.php-cache.outputs.cache-hit != 'true'
+        run: |
+          cd php-src
+          curl -fsSL -o onig.tar.gz "https://github.com/kkos/oniguruma/releases/download/v${ONIGURUMA_VERSION}/onig-${ONIGURUMA_VERSION}.tar.gz"
+          tar xf onig.tar.gz
+          cd "onig-${ONIGURUMA_VERSION}"
+          ./configure --host=aarch64-linux-android --prefix="$PREFIX" \
+            --enable-static --disable-shared CC="$CC" AR="$AR" RANLIB="$RANLIB"
+          make -j"$(nproc)"
+          make install
+
+      - name: Build libzip (static)
+        if: steps.php-cache.outputs.cache-hit != 'true'
+        run: |
+          cd php-src
+          curl -fsSL -o libzip.tar.gz "https://libzip.org/download/libzip-${LIBZIP_VERSION}.tar.gz"
+          tar xf libzip.tar.gz
+          cmake -S "libzip-${LIBZIP_VERSION}" -B libzip-build \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+            -DENABLE_COMMONCRYPTO=OFF \
+            -DENABLE_GNUTLS=OFF \
+            -DENABLE_OPENSSL=OFF \
+            -DENABLE_MBEDTLS=OFF \
+            -DENABLE_BZIP2=OFF \
+            -DENABLE_LZMA=OFF \
+            -DENABLE_ZSTD=OFF \
+            -DBUILD_TOOLS=OFF \
+            -DBUILD_REGRESS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_DOC=OFF
+          cmake --build libzip-build -j"$(nproc)"
+          cmake --install libzip-build
+
+      - name: Build PHP CLI
+        if: steps.php-cache.outputs.cache-hit != 'true'
+        run: |
+          cd php-src
+          curl -fsSL -o php.tar.gz "https://www.php.net/distributions/php-${PHP_VERSION}.tar.gz"
+          tar xf php.tar.gz
+          cd "php-${PHP_VERSION}"
+          export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig"
+          export PKG_CONFIG="pkg-config --static"
+          export CFLAGS="-O2 -fPIC"
+          export CPPFLAGS="-I$PREFIX/include"
+          export LDFLAGS="-L$PREFIX/lib"
+          ./configure \
+            --host=aarch64-linux-android \
+            --build=x86_64-linux-gnu \
+            --prefix="$PREFIX" \
+            --with-config-file-path="$PREFIX/etc" \
+            --disable-all \
+            --disable-cgi \
+            --disable-phpdbg \
+            --without-pear \
+            --enable-bcmath \
+            --enable-ctype \
+            --enable-dom \
+            --enable-fileinfo \
+            --enable-filter \
+            --enable-mbstring \
+            --with-openssl \
+            --enable-pdo \
+            --with-pdo-sqlite \
+            --enable-phar \
+            --enable-posix \
+            --enable-session \
+            --enable-simplexml \
+            --enable-sockets \
+            --with-sqlite3 \
+            --enable-tokenizer \
+            --enable-xml \
+            --enable-xmlreader \
+            --enable-xmlwriter \
+            --with-zip \
+            --with-zlib \
+            CC="$CC" CXX="$CXX" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP"
+          make -j"$(nproc)"
+
+      - name: Package libphp.so
+        if: steps.php-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p php-out
+          cp "php-src/php-${PHP_VERSION}/sapi/cli/php" php-out/libphp.so
+          $STRIP php-out/libphp.so
+          ls -lh php-out/libphp.so
+
+      - name: Verify PHP ELF (ARM64, dependensi bionic saja)
+        run: |
+          SO=php-out/libphp.so
+          if [ ! -f "$SO" ]; then
+            echo "::error::libphp.so tidak ditemukan: $SO"
+            exit 1
+          fi
+          file "$SO"
+          readelf -h "$SO" | grep -E "Class|Type|Machine"
+          if ! readelf -h "$SO" | grep -q "AArch64"; then
+            echo "::error::libphp.so bukan ELF AArch64"
+            exit 1
+          fi
+          readelf -d "$SO" | grep NEEDED || true
+          for lib in $(readelf -d "$SO" | grep NEEDED | sed -E 's/.*\[(.*)\]/\1/'); do
+            case "$lib" in
+              libc.so|libm.so|libdl.so|libz.so|liblog.so) ;;
+              *)
+                echo "::error::Dependensi dinamis tak terduga pada libphp.so: $lib"
+                exit 1
+                ;;
+            esac
+          done
+
+      - name: Upload PHP binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: php-android-arm64
+          path: php-out/libphp.so
+          if-no-files-found: error
+
   android:
     name: Android APK (debug)
-    needs: [core, frontend]
+    needs: [core, frontend, build-php]
     runs-on: ubuntu-latest
     env:
       CARGO_BUILD_JOBS: 2
@@ -153,6 +421,26 @@ jobs:
           fi
           ls -lh "$SO"
 
+      - name: Download PHP binary (libphp.so)
+        uses: actions/download-artifact@v4
+        with:
+          name: php-android-arm64
+          path: android/app/src/main/jniLibs/arm64-v8a
+
+      - name: Verify PHP native library
+        run: |
+          SO=android/app/src/main/jniLibs/arm64-v8a/libphp.so
+          if [ ! -f "$SO" ]; then
+            echo "::error::libphp.so tidak ditemukan: $SO"
+            exit 1
+          fi
+          file "$SO"
+          if ! readelf -h "$SO" | grep -q "AArch64"; then
+            echo "::error::libphp.so bukan ELF AArch64"
+            exit 1
+          fi
+          ls -lh "$SO"
+
       - name: Install root dependencies (Capacitor)
         run: npm ci
 
@@ -186,7 +474,7 @@ jobs:
             echo "::error::APK terlalu kecil ($SIZE bytes), diduga build rusak"
             exit 1
           fi
-          for entry in AndroidManifest.xml classes.dex lib/arm64-v8a/libwebforge_core.so; do
+          for entry in AndroidManifest.xml classes.dex lib/arm64-v8a/libwebforge_core.so lib/arm64-v8a/libphp.so; do
             if ! unzip -l "$APK" | grep -q "$entry"; then
               echo "::error::APK tidak berisi $entry"
               exit 1

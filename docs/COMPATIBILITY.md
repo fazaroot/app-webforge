@@ -28,7 +28,7 @@ Prinsip yang mengikat seluruh matriks: status server `running` hanya dari health
 
 | Runtime / layanan | Status Phase 1 | Alasan / keterangan |
 |---|---|---|
-| PHP | **Belum tersedia — belum dibundel** | Tidak ada binary PHP di APK. Proyek PHP (termasuk template `native-php` yang membuat `index.php` nyata) terdeteksi sebagai `needs_runtime`. Rencana: cross-compile php-src dengan NDK, mulai dari `php -S` — lihat [RUNTIME_PLAN.md](RUNTIME_PLAN.md). |
+| PHP | **Terbuild di CI, menunggu tes perangkat** | Sejak v0.2.0 PHP 8.3 CLI di-cross-compile di CI (NDK, dependensi statis) dan dibundel sebagai `libphp.so`; engine `php -S`, php.ini terkelola, PHP info, dan PHP CLI runner terhubung ke binary nyata itu. Daftar ekstensi yang benar-benar terkompilasi dibuktikan dari log CI dan output `php -m` di perangkat — targetnya bcmath, ctype, dom, fileinfo, filter, hash, json, mbstring, openssl, pdo, pdo_sqlite, phar, posix, session, simplexml, sockets, sqlite3, tokenizer, xml, xmlreader, xmlwriter, zip, zlib. Status naik menjadi "Berfungsi" hanya setelah terverifikasi di POCO M6. Composer belum dibundel; dependensi proyek diasumsikan sudah ada (`vendor/`). |
 | PHP-FPM | **Belum tersedia — belum dibundel** | Bergantung pada PHP yang belum dibundel. Direncanakan setelah `php -S` terbukti, dipasangkan dengan Nginx/Caddy. |
 | Apache httpd | **Belum tersedia — belum dibundel** | Tidak dibundel. Penilaian jujur di rencana runtime: porting httpd + APR ke Android berat dan `mod_php` tidak realistis; prioritas rendah dibanding Nginx/Caddy + PHP-FPM. |
 | Nginx | **Belum tersedia — belum dibundel** | Tidak ada binary Nginx di APK. Static server Rust menutup kebutuhan file statis Phase 1. Rencana cross-compile modul minimal ada di [RUNTIME_PLAN.md](RUNTIME_PLAN.md). |

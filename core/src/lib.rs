@@ -3,6 +3,7 @@ pub mod db;
 pub mod framework;
 pub mod monitoring;
 pub mod network;
+pub mod php;
 pub mod process;
 pub mod routes;
 pub mod runtime;
@@ -54,6 +55,8 @@ async fn build_state(config: Config) -> Result<AppState, Box<dyn std::error::Err
         started_at: chrono::Utc::now(),
         started_instant: std::time::Instant::now(),
         processes: Arc::new(Mutex::new(HashMap::new())),
+        native_lib_dir: state::native_lib_dir(),
+        php_info_cache: Arc::new(Mutex::new(None)),
     };
     monitoring::spawn_sampler(state.pool.clone(), state.config.workspace_dir.clone());
     Ok(state)

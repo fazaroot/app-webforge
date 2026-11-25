@@ -1,9 +1,11 @@
 package com.webforge.mobile
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.result.ActivityResult
 import androidx.documentfile.provider.DocumentFile
@@ -23,7 +25,11 @@ import java.io.File
  *   getStatus():  Promise<Record<string, unknown>>
  *   startCore():  Promise<Record<string, unknown>>
  *   stopCore():   Promise<Record<string, unknown>>
- * Ditambah pickDirectory (SAF) dan openBatterySettings sesuai API_CONTRACT.md.
+ * Ditambah pickDirectory (SAF) dan openBatterySettings sesuai API_CONTRACT.md,
+ * serta metode daya anti-stuck v0.2.0:
+ *   setKeepCpuAwake({enabled: boolean}): Promise<{ keepCpuAwake: boolean }>
+ *   getPowerStatus(): Promise<{ ignoringBatteryOptimizations: boolean, keepCpuAwake: boolean }>
+ *   requestIgnoreBatteryOptimizations(): Promise<{ ignoringBatteryOptimizations: boolean }>
  */
 @CapacitorPlugin(name = "WebForge")
 class WebForgePlugin : Plugin() {
@@ -70,6 +76,64 @@ class WebForgePlugin : Plugin() {
     fun stopCore(call: PluginCall) {
         WebForgeService.stop(context)
         call.resolve(JSObject().put("stopped", true))
+    }
+
+    /**
+     * Toggle "jaga CPU tetap bangun": disimpan di SharedPreferences dan
+     * diterapkan segera — service yang hidup menilai ulang WakeLock-nya
+     * sekarang juga. WakeLock sendiri tetap hanya dipegang bila core
+     * berjalan dan ada server berstatus running (keputusan di service).
+     */
+    @PluginMethod
+    fun setKeepCpuAwake(call: PluginCall) {
+        val enabled: Boolean? = call.getBoolean("enabled")
+        if (enabled == null) {
+            call.reject("Parameter 'enabled' wajib berupa boolean")
+            return
+        }
+        WebForgeService.writeKeepCpuAwake(context, enabled)
+        WebForgeService.requestWakeLockReevaluation()
+        call.resolve(JSObject().put("keepCpuAwake", enabled))
+    }
+
+    /** Status daya nyata: pengecualian baterai dari PowerManager + toggle. */
+    @PluginMethod
+    fun getPowerStatus(call: PluginCall) {
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        call.resolve(
+            JSObject()
+                .put(
+                    "ignoringBatteryOptimizations",
+                    powerManager.isIgnoringBatteryOptimizations(context.packageName)
+                )
+                .put("keepCpuAwake", WebForgeService.readKeepCpuAwake(context))
+        )
+    }
+
+    /**
+     * Meminta pengecualian optimasi baterai lewat dialog sistem untuk
+     * package ini. Hasilnya adalah status pada saat pemanggilan ini juga —
+     * jujur bisa masih false karena pengguna belum menjawab dialog.
+     */
+    @PluginMethod
+    fun requestIgnoreBatteryOptimizations(call: PluginCall) {
+        try {
+            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:${context.packageName}")
+            }
+            activity.startActivity(intent)
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            call.resolve(
+                JSObject().put(
+                    "ignoringBatteryOptimizations",
+                    powerManager.isIgnoringBatteryOptimizations(context.packageName)
+                )
+            )
+        } catch (e: Exception) {
+            call.reject(
+                "Gagal meminta pengecualian optimasi baterai: ${e.message ?: e.javaClass.simpleName}"
+            )
+        }
     }
 
     /**

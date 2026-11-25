@@ -1,3 +1,4 @@
+use crate::php;
 use crate::state::{app_log, AppState, ProcessHandle};
 use crate::util::{new_id, now_iso};
 use std::path::PathBuf;
@@ -6,6 +7,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 
+#[derive(Clone)]
 pub struct ServerRow {
     pub id: String,
     pub project_id: String,
@@ -14,6 +16,17 @@ pub struct ServerRow {
     pub bind_lan: bool,
     pub document_root: String,
     pub status: String,
+}
+
+/// Spesifikasi proses anak yang bisa diluncurkan ulang oleh watcher
+/// saat auto-restart.
+#[derive(Clone)]
+struct ChildLaunch {
+    program: PathBuf,
+    args: Vec<String>,
+    cwd: Option<PathBuf>,
+    envs: Vec<(String, String)>,
+    label: String,
 }
 
 pub async fn set_status(
@@ -37,6 +50,15 @@ pub async fn set_status(
     .bind(server_id)
     .execute(pool)
     .await;
+}
+
+async fn db_status(pool: &sqlx::SqlitePool, server_id: &str) -> Option<String> {
+    sqlx::query_scalar::<_, String>("SELECT status FROM server_instances WHERE id=?1")
+        .bind(server_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
 }
 
 async fn allocate_port(pool: &sqlx::SqlitePool, server_id: &str, port: i64) -> Result<(), String> {
@@ -98,6 +120,17 @@ pub async fn health_check(port: u16) -> bool {
     }
 }
 
+async fn wait_healthy(port: u16, timeout: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline {
+        if health_check(port).await {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    false
+}
+
 fn spawn_log_reader<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
     reader: R,
     pool: sqlx::SqlitePool,
@@ -114,60 +147,324 @@ fn spawn_log_reader<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
     });
 }
 
-fn spawn_watcher(state: AppState, server_id: String, child_arc: Arc<Mutex<Option<tokio::process::Child>>>) {
+async fn mark_process_ended(pool: &sqlx::SqlitePool, server_id: &str, exit_code: Option<i32>) {
+    let _ = sqlx::query(
+        "UPDATE server_processes SET ended_at=?1, exit_code=?2 WHERE server_id=?3 AND ended_at IS NULL",
+    )
+    .bind(now_iso())
+    .bind(exit_code)
+    .bind(server_id)
+    .execute(pool)
+    .await;
+}
+
+/// Luncurkan proses anak dan daftarkan handle-nya. Mengembalikan
+/// (pid, child_arc) agar watcher bisa memantau proses yang sama.
+async fn launch_child(
+    state: &AppState,
+    server: &ServerRow,
+    launch: &ChildLaunch,
+) -> Result<(Option<i64>, Arc<Mutex<Option<tokio::process::Child>>>), String> {
+    let mut cmd = tokio::process::Command::new(&launch.program);
+    cmd.args(&launch.args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(false);
+    if let Some(cwd) = &launch.cwd {
+        cmd.current_dir(cwd);
+    }
+    for (k, v) in &launch.envs {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("Gagal menjalankan proses server: {}", e))?;
+    let pid = child.id().map(|p| p as i64);
+    if let Some(out) = child.stdout.take() {
+        spawn_log_reader(out, state.pool.clone(), server.id.clone(), "info");
+    }
+    if let Some(err) = child.stderr.take() {
+        spawn_log_reader(err, state.pool.clone(), server.id.clone(), "error");
+    }
+    let child_arc = Arc::new(Mutex::new(Some(child)));
+    state
+        .processes
+        .lock()
+        .await
+        .insert(server.id.clone(), ProcessHandle::Child(child_arc.clone()));
+    let _ = sqlx::query(
+        "INSERT INTO server_processes (id, server_id, pid, started_at) VALUES (?1,?2,?3,?4)",
+    )
+    .bind(new_id())
+    .bind(&server.id)
+    .bind(pid)
+    .bind(now_iso())
+    .execute(&state.pool)
+    .await;
+    app_log(
+        &state.pool,
+        "server",
+        "info",
+        &format!(
+            "Proses {} dimulai (pid {}) di port {}",
+            launch.label,
+            pid.unwrap_or(-1),
+            server.port
+        ),
+        Some(&server.id),
+    )
+    .await;
+    Ok((pid, child_arc))
+}
+
+async fn kill_child_arc(child_arc: &Arc<Mutex<Option<tokio::process::Child>>>) {
+    let mut guard = child_arc.lock().await;
+    if let Some(mut child) = guard.take() {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+    }
+}
+
+/// Pantau proses anak; bila berhenti tak terduga saat status running/
+/// starting, restart otomatis dengan backoff 2s/5s/10s (maks 3 kali).
+/// Setelah anggaran habis status menjadi error. Stop manual tidak
+/// memicu restart karena status berubah ke stopping/stopped.
+fn spawn_child_watcher(
+    state: AppState,
+    server: ServerRow,
+    launch: ChildLaunch,
+    initial_child: Arc<Mutex<Option<tokio::process::Child>>>,
+) {
     tokio::spawn(async move {
+        let mut child_arc = initial_child;
+        let mut attempts_used: u32 = 0;
         loop {
-            tokio::time::sleep(Duration::from_millis(400)).await;
-            let exited: Option<Option<i32>> = {
+            // Tunggu proses saat ini berakhir.
+            let exit_code: Option<i32> = loop {
+                tokio::time::sleep(Duration::from_millis(400)).await;
                 let mut guard = child_arc.lock().await;
                 match guard.as_mut() {
                     Some(child) => match child.try_wait() {
                         Ok(Some(status)) => {
                             *guard = None;
-                            Some(status.code())
+                            break status.code();
                         }
-                        Ok(None) => None,
-                        Err(_) => Some(None),
+                        Ok(None) => continue,
+                        Err(_) => {
+                            *guard = None;
+                            break None;
+                        }
                     },
                     None => {
-                        // child taken by stop path
+                        // Child diambil jalur stop — bukan crash.
                         return;
                     }
                 }
             };
-            if let Some(code) = exited {
-                // Only mark error if DB still thinks it's running/starting (not stopped intentionally)
-                let row: Option<(String,)> =
-                    sqlx::query_as("SELECT status FROM server_instances WHERE id=?1")
-                        .bind(&server_id)
-                        .fetch_optional(&state.pool)
-                        .await
-                        .ok()
-                        .flatten();
-                if let Some((status,)) = row {
-                    if status == "running" || status == "starting" {
+            mark_process_ended(&state.pool, &server.id, exit_code).await;
+            let status = db_status(&state.pool, &server.id).await;
+            if !matches!(status.as_deref(), Some("running") | Some("starting")) {
+                state.processes.lock().await.remove(&server.id);
+                return;
+            }
+            // Crash tak terduga: coba restart sesuai anggaran.
+            let mut restarted = false;
+            while let Some(delay) = php::restart_delay(attempts_used) {
+                attempts_used += 1;
+                let msg = format!(
+                    "Proses server berhenti tak terduga (exit code {}); restart otomatis percobaan {}/{} dalam {} detik",
+                    exit_code.map(|c| c.to_string()).unwrap_or_else(|| "tidak diketahui".to_string()),
+                    attempts_used,
+                    php::MAX_RESTART_ATTEMPTS,
+                    delay.as_secs()
+                );
+                app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
+                set_status(&state.pool, &server.id, "starting", None, None, Some(&msg), false).await;
+                tokio::time::sleep(delay).await;
+                // Stop manual selama backoff membatalkan restart.
+                if db_status(&state.pool, &server.id).await.as_deref() != Some("starting") {
+                    return;
+                }
+                match launch_child(&state, &server, &launch).await {
+                    Ok((pid, new_arc)) => {
+                        if db_status(&state.pool, &server.id).await.as_deref() != Some("starting") {
+                            kill_child_arc(&new_arc).await;
+                            state.processes.lock().await.remove(&server.id);
+                            return;
+                        }
+                        if wait_healthy(server.port as u16, Duration::from_secs(5)).await {
+                            let started = now_iso();
+                            set_status(&state.pool, &server.id, "running", pid, Some(&started), None, false).await;
+                            app_log(
+                                &state.pool,
+                                "server",
+                                "info",
+                                &format!("Restart otomatis berhasil (percobaan {}), health check lolos", attempts_used),
+                                Some(&server.id),
+                            )
+                            .await;
+                            child_arc = new_arc;
+                            restarted = true;
+                            break;
+                        }
                         let msg = format!(
-                            "Proses server berhenti tak terduga (exit code {})",
-                            code.map(|c| c.to_string()).unwrap_or_else(|| "tidak diketahui".to_string())
+                            "Restart otomatis percobaan {} gagal: health check tidak lolos dalam 5 detik",
+                            attempts_used
                         );
-                        set_status(&state.pool, &server_id, "error", None, None, Some(&msg), false).await;
-                        app_log(&state.pool, "server", "error", &msg, Some(&server_id)).await;
-                        release_port(&state.pool, &server_id).await;
-                        let _ = sqlx::query(
-                            "UPDATE server_processes SET ended_at=?1, exit_code=?2 WHERE server_id=?3 AND ended_at IS NULL",
-                        )
-                        .bind(now_iso())
-                        .bind(code)
-                        .bind(&server_id)
-                        .execute(&state.pool)
-                        .await;
+                        app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
+                        kill_child_arc(&new_arc).await;
+                        mark_process_ended(&state.pool, &server.id, None).await;
+                    }
+                    Err(e) => {
+                        let msg = format!("Restart otomatis percobaan {} gagal: {}", attempts_used, e);
+                        app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
                     }
                 }
-                state.processes.lock().await.remove(&server_id);
+            }
+            if !restarted {
+                let msg = format!(
+                    "Proses server berhenti tak terduga (exit code {}) dan restart otomatis gagal setelah {} percobaan",
+                    exit_code.map(|c| c.to_string()).unwrap_or_else(|| "tidak diketahui".to_string()),
+                    php::MAX_RESTART_ATTEMPTS
+                );
+                set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
+                app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
+                release_port(&state.pool, &server.id).await;
+                state.processes.lock().await.remove(&server.id);
                 return;
+            }
+            // Berhasil restart: lanjut pantau proses baru (anggaran tidak reset).
+        }
+    });
+}
+
+/// Supervisor server static in-process (Android). Bila task serve berakhir
+/// tak terduga saat status running/starting, bind ulang dengan backoff
+/// 2s/5s/10s maks 3 kali; setelah itu status error. Abort dari jalur stop
+/// membatalkan supervisor beserta future serve di dalamnya.
+#[cfg(target_os = "android")]
+fn spawn_inprocess_supervisor(
+    state: AppState,
+    server: ServerRow,
+    host: String,
+    doc_root: PathBuf,
+) -> tokio::task::AbortHandle {
+    let port = server.port as u16;
+    let handle = tokio::spawn(async move {
+        let mut attempts_used: u32 = 0;
+        loop {
+            let listener = match tokio::net::TcpListener::bind((host.as_str(), port)).await {
+                Ok(l) => l,
+                Err(e) => {
+                    let status = db_status(&state.pool, &server.id).await;
+                    if !matches!(status.as_deref(), Some("running") | Some("starting")) {
+                        return;
+                    }
+                    match php::restart_delay(attempts_used) {
+                        Some(delay) => {
+                            attempts_used += 1;
+                            let msg = format!(
+                                "Bind port {} gagal ({}); restart otomatis percobaan {}/{} dalam {} detik",
+                                port,
+                                e,
+                                attempts_used,
+                                php::MAX_RESTART_ATTEMPTS,
+                                delay.as_secs()
+                            );
+                            app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
+                            set_status(&state.pool, &server.id, "starting", None, None, Some(&msg), true).await;
+                            tokio::time::sleep(delay).await;
+                            if db_status(&state.pool, &server.id).await.as_deref() != Some("starting") {
+                                return;
+                            }
+                            continue;
+                        }
+                        None => {
+                            let msg = format!(
+                                "Server in-process gagal bind port {} dan restart otomatis habis setelah {} percobaan: {}",
+                                port,
+                                php::MAX_RESTART_ATTEMPTS,
+                                e
+                            );
+                            set_status(&state.pool, &server.id, "error", None, None, Some(&msg), true).await;
+                            app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
+                            release_port(&state.pool, &server.id).await;
+                            state.processes.lock().await.remove(&server.id);
+                            return;
+                        }
+                    }
+                }
+            };
+            let app = crate::static_app(doc_root.clone());
+            let serve = axum::serve(listener, app);
+            tokio::pin!(serve);
+            let mut healthy = false;
+            let health_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            let serve_result = loop {
+                tokio::select! {
+                    r = &mut serve => break r.map_err(|e| e.to_string()),
+                    _ = tokio::time::sleep(Duration::from_millis(200)), if !healthy => {
+                        if health_check(port).await {
+                            healthy = true;
+                            let status = db_status(&state.pool, &server.id).await;
+                            if status.as_deref() == Some("starting") {
+                                let started = now_iso();
+                                set_status(&state.pool, &server.id, "running", None, Some(&started), None, true).await;
+                                app_log(
+                                    &state.pool,
+                                    "server",
+                                    "info",
+                                    &format!("Health check lolos, server berjalan di port {}", port),
+                                    Some(&server.id),
+                                )
+                                .await;
+                            }
+                        } else if tokio::time::Instant::now() > health_deadline {
+                            break Err("Health check gagal dalam 5 detik".to_string());
+                        }
+                    }
+                }
+            };
+            // Task serve berakhir (atau health check gagal).
+            let status = db_status(&state.pool, &server.id).await;
+            if !matches!(status.as_deref(), Some("running") | Some("starting")) {
+                return;
+            }
+            let reason = match &serve_result {
+                Ok(()) => "task server berakhir".to_string(),
+                Err(e) => e.clone(),
+            };
+            match php::restart_delay(attempts_used) {
+                Some(delay) => {
+                    attempts_used += 1;
+                    let msg = format!(
+                        "Server in-process berhenti tak terduga ({}); restart otomatis percobaan {}/{} dalam {} detik",
+                        reason,
+                        attempts_used,
+                        php::MAX_RESTART_ATTEMPTS,
+                        delay.as_secs()
+                    );
+                    app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
+                    set_status(&state.pool, &server.id, "starting", None, None, Some(&msg), true).await;
+                    tokio::time::sleep(delay).await;
+                    if db_status(&state.pool, &server.id).await.as_deref() != Some("starting") {
+                        return;
+                    }
+                }
+                None => {
+                    let msg = format!(
+                        "Server in-process berhenti tak terduga ({}) dan restart otomatis gagal setelah {} percobaan",
+                        reason,
+                        php::MAX_RESTART_ATTEMPTS
+                    );
+                    set_status(&state.pool, &server.id, "error", None, None, Some(&msg), true).await;
+                    app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
+                    release_port(&state.pool, &server.id).await;
+                    state.processes.lock().await.remove(&server.id);
+                    return;
+                }
             }
         }
     });
+    handle.abort_handle()
 }
 
 pub async fn start_server(state: &AppState, server: &ServerRow, project_path: &str) -> Result<(), String> {
@@ -187,6 +484,25 @@ pub async fn start_server(state: &AppState, server: &ServerRow, project_path: &s
         return Err(msg);
     }
 
+    // Validasi engine sebelum mengalokasikan port.
+    let php_binary = match server.engine.as_str() {
+        "static" => None,
+        "php" => match php::find_php_binary(state.native_lib_dir.as_deref()) {
+            Some(b) => Some(b),
+            None => {
+                let msg = "PHP tidak tersedia: libphp.so tidak ditemukan di nativeLibraryDir dan php tidak ada di PATH".to_string();
+                set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
+                app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
+                return Err(msg);
+            }
+        },
+        other => {
+            let msg = format!("Engine {} belum didukung sebagai engine server", other);
+            set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
+            return Err(msg);
+        }
+    };
+
     set_status(&state.pool, &server.id, "starting", None, None, None, false).await;
 
     // Port conflict: allocation table + real bind test
@@ -203,17 +519,47 @@ pub async fn start_server(state: &AppState, server: &ServerRow, project_path: &s
         return Err(msg);
     }
 
+    if let Some(binary) = php_binary {
+        // Engine PHP: spawn `php -S host:port -t <docroot> -c <php.ini>`.
+        let settings = php::load_php_settings(&state.pool).await;
+        let ini_path = match php::write_php_ini(&state.config.data_dir, &settings) {
+            Ok(p) => p,
+            Err(e) => {
+                let msg = format!("Gagal menulis php.ini: {}", e);
+                release_port(&state.pool, &server.id).await;
+                set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
+                app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
+                return Err(msg);
+            }
+        };
+        let launch = ChildLaunch {
+            program: binary,
+            args: php::build_php_server_args(host, port_u16, &doc_root, &ini_path),
+            cwd: Some(PathBuf::from(project_path)),
+            envs: vec![
+                ("HOME".to_string(), state.config.data_dir.to_string_lossy().to_string()),
+                ("TMPDIR".to_string(), php::php_tmp_dir(&state.config.data_dir).to_string_lossy().to_string()),
+                ("PHPRC".to_string(), state.config.data_dir.to_string_lossy().to_string()),
+            ],
+            label: "PHP built-in server".to_string(),
+        };
+        let (pid, child_arc) = match launch_child(state, server, &launch).await {
+            Ok(v) => v,
+            Err(msg) => {
+                release_port(&state.pool, &server.id).await;
+                set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
+                app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
+                return Err(msg);
+            }
+        };
+        spawn_child_watcher(state.clone(), server.clone(), launch, child_arc);
+        return finish_start(state, server, pid, false).await;
+    }
+
     #[cfg(target_os = "android")]
     {
-        // In-process static server task (cannot exec a child from a .so reliably).
-        let listener = tokio::net::TcpListener::bind((host, port_u16))
-            .await
-            .map_err(|e| e.to_string())?;
-        let app = crate::static_app(doc_root.clone());
-        let handle = tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
-        });
-        let abort = handle.abort_handle();
+        // In-process static server task dengan supervisor auto-restart.
+        let abort = spawn_inprocess_supervisor(state.clone(), server.clone(), host.to_string(), doc_root.clone());
         state
             .processes
             .lock()
@@ -227,80 +573,43 @@ pub async fn start_server(state: &AppState, server: &ServerRow, project_path: &s
         .bind(now_iso())
         .execute(&state.pool)
         .await;
-        // health check below with in_process=true
         return finish_start(state, server, None, true).await;
     }
 
     #[cfg(not(target_os = "android"))]
     {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let mut cmd = tokio::process::Command::new(exe);
-        cmd.arg("serve-static")
-            .arg("--root")
-            .arg(&doc_root)
-            .arg("--port")
-            .arg(server.port.to_string())
-            .arg("--host")
-            .arg(host)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(false);
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                let msg = format!("Gagal menjalankan proses server: {}", e);
+        let launch = ChildLaunch {
+            program: exe,
+            args: vec![
+                "serve-static".to_string(),
+                "--root".to_string(),
+                doc_root.to_string_lossy().to_string(),
+                "--port".to_string(),
+                server.port.to_string(),
+                "--host".to_string(),
+                host.to_string(),
+            ],
+            cwd: None,
+            envs: Vec::new(),
+            label: "static server".to_string(),
+        };
+        let (pid, child_arc) = match launch_child(state, server, &launch).await {
+            Ok(v) => v,
+            Err(msg) => {
                 release_port(&state.pool, &server.id).await;
                 set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
                 return Err(msg);
             }
         };
-        let pid = child.id().map(|p| p as i64);
-        if let Some(out) = child.stdout.take() {
-            spawn_log_reader(out, state.pool.clone(), server.id.clone(), "info");
-        }
-        if let Some(err) = child.stderr.take() {
-            spawn_log_reader(err, state.pool.clone(), server.id.clone(), "error");
-        }
-        let child_arc = Arc::new(Mutex::new(Some(child)));
-        state
-            .processes
-            .lock()
-            .await
-            .insert(server.id.clone(), ProcessHandle::Child(child_arc.clone()));
-        spawn_watcher(state.clone(), server.id.clone(), child_arc);
-        let _ = sqlx::query(
-            "INSERT INTO server_processes (id, server_id, pid, started_at) VALUES (?1,?2,?3,?4)",
-        )
-        .bind(new_id())
-        .bind(&server.id)
-        .bind(pid)
-        .bind(now_iso())
-        .execute(&state.pool)
-        .await;
-        app_log(
-            &state.pool,
-            "server",
-            "info",
-            &format!("Proses static server dimulai (pid {}) di port {}", pid.unwrap_or(-1), server.port),
-            Some(&server.id),
-        )
-        .await;
+        spawn_child_watcher(state.clone(), server.clone(), launch, child_arc);
         finish_start(state, server, pid, false).await
     }
 }
 
 async fn finish_start(state: &AppState, server: &ServerRow, pid: Option<i64>, in_process: bool) -> Result<(), String> {
     let port_u16 = server.port as u16;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    let mut healthy = false;
-    while tokio::time::Instant::now() < deadline {
-        if health_check(port_u16).await {
-            healthy = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    if healthy {
+    if wait_healthy(port_u16, Duration::from_secs(5)).await {
         let started = now_iso();
         set_status(&state.pool, &server.id, "running", pid, Some(&started), None, in_process).await;
         app_log(
@@ -325,11 +634,7 @@ async fn stop_process_internal(state: &AppState, server_id: &str) {
     let handle = state.processes.lock().await.remove(server_id);
     match handle {
         Some(ProcessHandle::Child(arc)) => {
-            let mut guard = arc.lock().await;
-            if let Some(mut child) = guard.take() {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
-            }
+            kill_child_arc(&arc).await;
         }
         Some(ProcessHandle::InProcess(abort)) => {
             abort.abort();
