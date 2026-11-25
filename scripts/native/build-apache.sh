@@ -261,6 +261,8 @@ tar -xzf "$DL/httpd.tar.gz" -C "$SRC"
     CC="$CC" CXX="$CXX" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP" \
     "${CROSS_CACHE_VARS[@]}" \
     ac_cv_func_poll=yes
+  # crypt() tidak tersedia di Bionic; nonaktifkan algoritma crypt htpasswd.
+  sed -i 's/#if defined(WIN32) || defined(NETWARE)/#if defined(WIN32) || defined(NETWARE) || defined(__ANDROID__)/' support/passwd_common.h
   # gen_test_char harus berjalan di host: bangun versi host-nya dan tandai
   # hasil generate sebagai mutakhir agar make tidak membangun ulang target.
   cc -DCROSS_COMPILE -o server/gen_test_char server/gen_test_char.c

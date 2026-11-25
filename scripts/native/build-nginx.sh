@@ -320,8 +320,7 @@ if ! ./configure \
   --with-http_realip_module \
   --with-http_gzip_static_module \
   --with-http_stub_status_module \
-  --without-http_auth_basic_module \
-  --test-build-epoll; then
+  --without-http_auth_basic_module; then
   echo "::error::configure Nginx gagal; isi objs/autoconf.err:"
   cat objs/autoconf.err || true
   exit 1

@@ -201,6 +201,11 @@ if [ ! -f "$HOST_BUILD/import_executables.cmake" ]; then
 fi
 [ -f "$HOST_BUILD/import_executables.cmake" ] || fail "import_executables.cmake tidak dihasilkan host build"
 
+# Curses hanya dibutuhkan readline klien; mariadbd tidak membutuhkannya.
+# Longgarkan FIND_CURSES agar configure target tidak gagal tanpa ncurses.
+sed -i 's/FIND_PACKAGE(Curses REQUIRED)/FIND_PACKAGE(Curses)/' "$MARIADB_SRC/cmake/readline.cmake"
+sed -i 's/MESSAGE(FATAL_ERROR ${ERRORMSG})/MESSAGE(STATUS "Curses tidak ditemukan; readline klien dinonaktifkan di target Android")/' "$MARIADB_SRC/cmake/readline.cmake"
+
 # --- Target build Android ---
 log "configure MariaDB $MARIADB_VERSION untuk aarch64-linux-android$ANDROID_API"
 cmake -S "$MARIADB_SRC" -B "$TARGET_BUILD" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
