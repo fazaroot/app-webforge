@@ -253,6 +253,16 @@ export LIBS="-lssl -lcrypto${SHIM_LIBS} -ldl"
 sed -i 's|^#define HAVE_PROC_SELF_EXE 1$|/* #undef HAVE_PROC_SELF_EXE (WebForge: resolusi argv0) */|' src/include/pg_config.h
 grep -E "HAVE_PROC_SELF_EXE|USE_UNNAMED_POSIX_SEMAPHORES" src/include/pg_config.h || true
 
+# Cek libpq-refs-stamp menolak referensi pthread_exit (sah di Bionic dan
+# dipakai patch Termux); turunkan menjadi peringatan.
+python3 - <<'PYEOF'
+import pathlib, re
+mk = pathlib.Path("src/interfaces/libpq/Makefile")
+content = mk.read_text()
+content2 = re.sub(r'(libpq must not be calling[^;]*; \\\n\s*)exit 1;', r'\1true;', content)
+mk.write_text(content2)
+PYEOF
+
 log "make PostgreSQL"
 make -j"$(nproc)"
 

@@ -212,6 +212,92 @@ export NGX_WITH_NGX_HAVE_CRYPT=0
 # tidak menyediakannya dan auth_basic dimatikan, jadi include ini aman dibuang.
 sed -i 's|#include <crypt.h>|/* crypt.h tidak tersedia di Bionic API 26 */|' src/os/unix/ngx_linux_config.h
 
+
+# Bionic API 26 tidak menyediakan glob()/globfree() (baru API 28), padahal
+# Nginx memakainya untuk pola include konfigurasi. Sediakan shim minimal
+# berbasis opendir+fnmatch: mendukung pola "dir/*.conf" (direktori literal,
+# wildcard pada nama file) yang dipakai include konfigurasi.
+cat > "$WORK_DIR/glob_shim.h" <<'EOF'
+#ifndef WEBFORGE_GLOB_SHIM_H
+#define WEBFORGE_GLOB_SHIM_H
+#include <glob.h>
+int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob_t *pglob);
+void globfree(glob_t *pglob);
+#endif
+EOF
+cat > "$WORK_DIR/glob_shim.c" <<'EOF'
+#include <glob.h>
+#include <dirent.h>
+#include <fnmatch.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifndef GLOB_NOMATCH
+#define GLOB_NOMATCH 3
+#endif
+
+static int cmp_str(const void *a, const void *b) {
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob_t *pglob) {
+    (void)errfunc;
+    const char *slash = strrchr(pattern, '/');
+    const char *base = slash ? slash + 1 : pattern;
+    char dirbuf[1024];
+    const char *dir = ".";
+    if (slash) {
+        size_t dlen = (size_t)(slash - pattern);
+        if (dlen == 0) { dir = "/"; }
+        else {
+            if (dlen >= sizeof(dirbuf)) return GLOB_NOMATCH;
+            memcpy(dirbuf, pattern, dlen); dirbuf[dlen] = '\0';
+            dir = dirbuf;
+        }
+    }
+    if (strpbrk(dir, "*?[") != NULL) return GLOB_NOMATCH;
+    DIR *d = opendir(dir);
+    if (!d) return GLOB_NOMATCH;
+    size_t cap = 16, n = 0;
+    char **list = malloc(cap * sizeof(char *));
+    if (!list) { closedir(d); return GLOB_NOMATCH; }
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (de->d_name[0] == '.' && base[0] != '.') continue;
+        if (fnmatch(base, de->d_name, 0) != 0) continue;
+        if (n == cap) {
+            cap *= 2;
+            char **nl = realloc(list, cap * sizeof(char *));
+            if (!nl) { closedir(d); return GLOB_NOMATCH; }
+            list = nl;
+        }
+        size_t len = strlen(dir) + 1 + strlen(de->d_name) + 1;
+        list[n] = malloc(len);
+        if (!list[n]) { closedir(d); return GLOB_NOMATCH; }
+        if (slash) snprintf(list[n], len, "%s/%s", dir, de->d_name);
+        else snprintf(list[n], len, "%s", de->d_name);
+        n++;
+    }
+    closedir(d);
+    if (n == 0) { free(list); return GLOB_NOMATCH; }
+    qsort(list, n, sizeof(char *), cmp_str);
+    pglob->gl_pathc = n;
+    pglob->gl_pathv = list;
+    pglob->gl_offs = 0;
+    pglob->gl_flags = flags;
+    return 0;
+}
+
+void globfree(glob_t *pglob) {
+    if (!pglob) return;
+    for (size_t i = 0; i < pglob->gl_pathc; i++) free(pglob->gl_pathv[i]);
+    free(pglob->gl_pathv);
+    pglob->gl_pathc = 0;
+    pglob->gl_pathv = NULL;
+}
+EOF
+$CC -O2 -fPIC -c "$WORK_DIR/glob_shim.c" -o "$WORK_DIR/glob_shim.o"
+
 ./configure \
   --prefix=/webforge/nginx \
   --sbin-path=/webforge/nginx \
@@ -225,8 +311,8 @@ sed -i 's|#include <crypt.h>|/* crypt.h tidak tersedia di Bionic API 26 */|' src
   --http-uwsgi-temp-path=/webforge/uwsgi_temp \
   --http-scgi-temp-path=/webforge/scgi_temp \
   --with-cc="$CC" \
-  --with-cc-opt="-I$PREFIX/include -O2" \
-  --with-ld-opt="-L$PREFIX/lib" \
+  --with-cc-opt="-I$PREFIX/include -O2 -include $WORK_DIR/glob_shim.h" \
+  --with-ld-opt="-L$PREFIX/lib $WORK_DIR/glob_shim.o" \
   --with-threads \
   --with-http_realip_module \
   --with-http_gzip_static_module \
@@ -234,10 +320,6 @@ sed -i 's|#include <crypt.h>|/* crypt.h tidak tersedia di Bionic API 26 */|' src
   --without-http_auth_basic_module \
   --test-build-epoll
 
-
-# glob()/globfree() Bionic baru dideklarasikan API 28; matikan deteksi glob
-# agar Nginx memakai implementasi fallback opendir-nya.
-sed -i '/#define NGX_HAVE_GLOB/d' objs/ngx_auto_config.h
 
 if ! grep -q "NGX_HAVE_EPOLL" objs/ngx_auto_config.h; then
   echo "::warning::NGX_HAVE_EPOLL tidak terdeteksi; Nginx akan memakai poll/select. Periksa log configure."
