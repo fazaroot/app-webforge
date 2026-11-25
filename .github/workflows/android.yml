@@ -325,7 +325,7 @@ jobs:
           # struct __res_state tidak utuh untuk aplikasi sehingga
           # ext/standard/dns.c gagal kompilasi. Matikan deteksi itu
           # di php_config.h; fungsi DNS PHP memakai jalur fallback.
-          for sym in HAVE_RES_NINIT HAVE_RES_NSEARCH HAVE_RES_NCLOSE HAVE_RES_SEARCH HAVE_RES_INIT HAVE_DN_SKIPNAME HAVE_DN_EXPAND; do
+          for sym in HAVE_RES_NINIT HAVE_RES_NSEARCH HAVE_RES_NCLOSE HAVE_RES_SEARCH HAVE_RES_INIT HAVE_DN_SKIPNAME HAVE_DN_EXPAND HAVE_GETDTABLESIZE; do
             sed -i "s/^#define $sym 1$/\/* #undef $sym *\//" main/php_config.h
           done
           grep -E "HAVE_RES_|HAVE_DN_" main/php_config.h || true
