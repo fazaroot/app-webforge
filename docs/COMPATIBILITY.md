@@ -42,7 +42,7 @@ Prinsip yang mengikat seluruh matriks: status server `running` hanya dari health
 
 ## Catatan perangkat dan platform
 
-- **Arsitektur:** APK v0.3.0 menargetkan `arm64-v8a` (APK 96.823.579 byte, CI run 45658924919). Perangkat uji utama adalah Xiaomi POCO M6 (ARM64, HyperOS). Perilaku OEM lain — terutama soal pembunuhan proses latar — bisa berbeda dan belum terverifikasi di luar perangkat uji.
+- **Arsitektur:** APK v0.3.0 menargetkan `arm64-v8a` (APK 99.613.005 byte, CI run 45660497320). Perangkat uji utama adalah Xiaomi POCO M6 (ARM64, HyperOS). Perilaku OEM lain — terutama soal pembunuhan proses latar — bisa berbeda dan belum terverifikasi di luar perangkat uji.
 - **Versi Android:** `minSdk 26`, `targetSdk 35`. Kebijakan W^X Android 10+ berlaku penuh: kode native hanya dieksekusi dari `nativeLibraryDir`.
 - **Port:** hanya port ≥ 1024. Management API tetap di `127.0.0.1:8765` dan tidak bisa diakses dari jaringan.
 - **Deteksi di host dev bukan bukti bundel.** Bila core dijalankan di Linux dan menemukan `git`/`python3`/`node` di PATH, registry melaporkannya dengan `source: "path"`. Itu kondisi host, bukan isi APK.

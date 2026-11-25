@@ -139,7 +139,7 @@ URL di bawah disalin persis dari hasil pencarian yang dipakai untuk menyusun ren
 
 ## Hasil v0.3.0 (2026-11-25)
 
-Seluruh runtime yang direncanakan kini terbuild di CI dan masuk APK (run 45658924919 hijau di semua job; APK 96.823.579 byte). Status jujurnya tetap **"terbuild di CI, menunggu tes perangkat"** sampai health check lolos di POCO M6. Ukuran `.so` di APK:
+Seluruh runtime yang direncanakan kini terbuild di CI dan masuk APK (run 45660497320 hijau di semua job; APK 99.613.005 byte). Status jujurnya tetap **"terbuild di CI, menunggu tes perangkat"** sampai health check lolos di POCO M6. Ukuran `.so` di APK:
 
 | Runtime | Metode bundel | Ukuran `.so` |
 |---|---|---:|
@@ -148,7 +148,7 @@ Seluruh runtime yang direncanakan kini terbuild di CI dan masuk APK (run 4565892
 | Apache httpd 2.4.62 | NDK statis (APR, APR-util, PCRE2, expat, OpenSSL), tanpa `mod_proxy` | 7.292.200 |
 | Python 3.12.7 | CPython standalone NDK + stdlib zip 12.256.799 byte | 14.690.856 |
 | Node.js (nodejs-mobile v18.20.4) | `libnode.so` + shim JNI, proses `:node`, npm 10.8.2 dibundel | 62.475.584 + 124.800 |
-| PostgreSQL 16.3 | NDK + patch Termux, libpq statis, share zip 4.550.661 byte | 14.135.520 (+initdb 5.362.976, pg_ctl 64.048, psql) |
+| PostgreSQL 16.3 | NDK + patch Termux, libpq statis, share zip 4.550.661 byte | 14.135.520 (+initdb 5.362.976, pg_ctl 64.048, psql 5.739.544) |
 | MariaDB 10.11.8 | NDK (OpenSSL, PCRE2, ncurses statis), bootstrap `--bootstrap`, share zip 550.845 byte | 29.867.848 |
 | PHP 8.3.14 | NDK statis (sejak v0.2.0) | 25.474.008 |
 
