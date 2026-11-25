@@ -264,6 +264,18 @@ jobs:
           cmake --build libzip-build -j"$(nproc)"
           cmake --install libzip-build
 
+      - name: Build zlib (static)
+        if: steps.php-cache.outputs.cache-hit != 'true'
+        run: |
+          # PHP configure mencari zlib lewat pkg-config; sysroot NDK
+          # tidak menyediakan zlib.pc, jadi bangun zlib statis sendiri.
+          curl -fsSL -o zlib.tar.gz "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz"
+          tar xf zlib.tar.gz
+          cd zlib-1.3.1
+          CC="$CC" AR="$AR" RANLIB="$RANLIB" ./configure --prefix="$PREFIX" --static
+          make -j"$(nproc)"
+          make install
+
       - name: Build PHP CLI
         if: steps.php-cache.outputs.cache-hit != 'true'
         run: |
