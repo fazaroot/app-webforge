@@ -338,7 +338,7 @@ if ! ./configure \
 fi
 
 
-if ! grep -q '#define NGX_ERROR_LOG_PATH "logs/error.log"' objs/ngx_auto_config.h; then
+if ! grep -Eq '#define NGX_ERROR_LOG_PATH[[:space:]]+"logs/error.log"' objs/ngx_auto_config.h; then
   echo "::error::NGX_ERROR_LOG_PATH bukan logs/error.log relatif; Nginx akan mencoba membuka error log compile-time di luar prefix runtime." >&2
   grep -E "NGX_ERROR_LOG_PATH|NGX_PREFIX" objs/ngx_auto_config.h || true
   exit 1
