@@ -237,6 +237,8 @@ cmake -S "$MARIADB_SRC" -B "$TARGET_BUILD" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DANDROID_PLATFORM="android-${ANDROID_API}" \
   -DANDROID_STL=c++_static \
   -DCMAKE_PREFIX_PATH="$PREFIX" \
+  -DCMAKE_C_FLAGS="-include ctype.h -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types" \
+  -DCMAKE_CXX_FLAGS="-Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types" \
   -DCURSES_LIBRARY="$PREFIX/lib/libncurses.a" \
   -DCURSES_INCLUDE_PATH="$PREFIX/include" \
   -DIMPORT_EXECUTABLES="$HOST_BUILD/import_executables.cmake" \

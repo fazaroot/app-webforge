@@ -369,8 +369,10 @@ mod tests {
         );
         for other in &r[1..] {
             if !other.available {
-                assert!(other.reason.is_some());
-                assert_eq!(other.source, "none");
+                // Runtime tidak tersedia wajib punya alasan jujur. Source
+                // boleh "path"/"bundled" bila binary ditemukan tetapi probe
+                // versinya gagal di host uji.
+                assert!(other.reason.is_some(), "runtime {} tidak tersedia tanpa alasan", other.id);
             }
         }
     }
