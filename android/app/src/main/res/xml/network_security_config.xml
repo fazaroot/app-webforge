@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext HTTP hanya diizinkan ke loopback: management API core berjalan
+  di http://127.0.0.1:8765 dan server proyek lokal juga loopback/LAN yang
+  dibuka pengguna sendiri. Domain lain tetap wajib HTTPS.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

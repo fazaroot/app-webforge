@@ -1,0 +1,32 @@
+# Dependensi & hasil build
+node_modules/
+frontend/node_modules/
+frontend/dist/
+core/target/
+target/
+dist/
+
+# Data runtime & rahasia lokal
+*.db
+*.db-shm
+*.db-wal
+.env
+*.token
+api.token
+webforge-data/
+
+# Native library hasil cross-compile (dihasilkan CI, jangan commit)
+android/app/src/main/jniLibs/**/*.so
+
+# Android/Gradle
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+
+# Lain-lain
+*.log
+.DS_Store

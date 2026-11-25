@@ -1,0 +1,202 @@
+# WebForge Mobile CI — Rust core + frontend + APK debug (Capacitor)
+#
+# Catatan:
+# - TIDAK memakai android-actions/setup-android (pernah gagal di TeleCore).
+#   Runner ubuntu-latest sudah menyediakan Android SDK + NDK.
+# - libwebforge_core.so dihasilkan cargo-ndk di job android dan tidak
+#   pernah di-commit.
+# - Belum ada job release APK: signing belum dikonfigurasi.
+
+name: WebForge Mobile CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Core (Rust)
+    runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            core/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('core/Cargo.toml', 'core/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cargo test
+        run: cargo test --manifest-path core/Cargo.toml
+
+      - name: Cargo build (release)
+        run: cargo build --release --manifest-path core/Cargo.toml
+
+  frontend:
+    name: Frontend (React/Vite)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Test
+        working-directory: frontend
+        run: npx vitest run
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+  android:
+    name: Android APK (debug)
+    needs: [core, frontend]
+    runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup JDK 21 (Temurin)
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+
+      - name: Setup Rust (stable) + target Android
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            core/target/
+          key: ${{ runner.os }}-cargo-android-${{ hashFiles('core/Cargo.toml', 'core/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-android-
+            ${{ runner.os }}-cargo-
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Locate Android NDK
+        run: |
+          if [ -z "$ANDROID_NDK_HOME" ]; then
+            NDK_DIR=$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)
+            if [ -z "$NDK_DIR" ]; then
+              echo "::error::Android NDK tidak ditemukan di $ANDROID_HOME/ndk"
+              exit 1
+            fi
+            echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          fi
+          echo "NDK: ${ANDROID_NDK_HOME:-$NDK_DIR}"
+
+      - name: Build Rust core untuk Android (arm64-v8a)
+        working-directory: core
+        run: cargo ndk -t arm64-v8a -o ../android/app/src/main/jniLibs build --release --lib
+
+      - name: Verify native library
+        run: |
+          SO=android/app/src/main/jniLibs/arm64-v8a/libwebforge_core.so
+          if [ ! -f "$SO" ]; then
+            echo "::error::libwebforge_core.so tidak ditemukan: $SO"
+            exit 1
+          fi
+          ls -lh "$SO"
+
+      - name: Install root dependencies (Capacitor)
+        run: npm ci
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Capacitor sync
+        run: npx cap sync android
+
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Validate APK
+        run: |
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          if [ ! -f "$APK" ]; then
+            echo "::error::APK tidak ditemukan: $APK"
+            exit 1
+          fi
+          SIZE=$(stat -c%s "$APK")
+          echo "APK: $APK ($SIZE bytes)"
+          if [ "$SIZE" -le 1048576 ]; then
+            echo "::error::APK terlalu kecil ($SIZE bytes), diduga build rusak"
+            exit 1
+          fi
+          for entry in AndroidManifest.xml classes.dex lib/arm64-v8a/libwebforge_core.so; do
+            if ! unzip -l "$APK" | grep -q "$entry"; then
+              echo "::error::APK tidak berisi $entry"
+              exit 1
+            fi
+            echo "OK: $entry"
+          done
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: webforge-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
