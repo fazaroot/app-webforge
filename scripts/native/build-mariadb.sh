@@ -253,6 +253,8 @@ fi
 [ -f "$PREFIX/lib/libpcre2-8.a" ] || fail "libpcre2-8.a tidak terbuild"
 
 # --- Target build Android ---
+export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
+export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
 log "configure MariaDB $MARIADB_VERSION untuk aarch64-linux-android$ANDROID_API"
 cmake -S "$MARIADB_SRC" -B "$TARGET_BUILD" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
