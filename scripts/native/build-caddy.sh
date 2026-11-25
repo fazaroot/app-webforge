@@ -91,7 +91,7 @@ if [ -z "$READELF" ]; then
   exit 1
 fi
 "$READELF" -h "$OUT" | grep -E "Class|Type|Machine"
-if ! "$READELF" -h "$OUT" | grep -q "AArch64"; then
+if ! "$READELF" -h "$OUT" | grep "AArch64" >/dev/null; then
   echo "::error::libcaddy.so bukan ELF AArch64." >&2
   exit 1
 fi

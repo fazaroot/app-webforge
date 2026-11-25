@@ -230,6 +230,9 @@ export NGX_WITH_NGX_HAVE_CRYPT=0
   --without-http_auth_basic_module \
   --test-build-epoll
 
+# Bionic API 26 tidak menyediakan crypt.h; pastikan NGX_HAVE_CRYPT mati.
+sed -i '/#define NGX_HAVE_CRYPT/d' objs/ngx_auto_config.h
+
 if ! grep -q "NGX_HAVE_EPOLL" objs/ngx_auto_config.h; then
   echo "::warning::NGX_HAVE_EPOLL tidak terdeteksi; Nginx akan memakai poll/select. Periksa log configure."
 fi
@@ -246,7 +249,7 @@ if command -v file >/dev/null 2>&1; then
   file "$OUT"
 fi
 "$READELF" -h "$OUT" | grep -E "Class|Type|Machine"
-if ! "$READELF" -h "$OUT" | grep -q "AArch64"; then
+if ! "$READELF" -h "$OUT" | grep "AArch64" >/dev/null; then
   echo "::error::libnginx.so bukan ELF AArch64." >&2
   exit 1
 fi

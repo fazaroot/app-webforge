@@ -158,16 +158,28 @@ fi
 # --- Shim Termux (opsional, statis) ---
 SHIM_LIBS=""
 SHIM_STATUS="tidak dibangun"
-if [ -f "$TERMUX_DIR/packages/libandroid-shmem/shmem.c" ]; then
-  log "build libandroid-shmem (statis)"
-  if $CC -O2 -fPIC -c "$TERMUX_DIR/packages/libandroid-shmem/shmem.c" -o "$WORK_DIR/shmem.o"; then
-    $AR rcs "$PREFIX/lib/libandroid-shmem.a" "$WORK_DIR/shmem.o"
-    SHIM_LIBS="$SHIM_LIBS -landroid-shmem"
-    SHIM_STATUS="libandroid-shmem"
-  else
-    log "peringatan: libandroid-shmem gagal dikompilasi; lanjut tanpa shim shmem"
-  fi
+# Patch Termux PostgreSQL menautkan -landroid-shmem; source shim ada di
+# repo termux/libandroid-shmem (paket Termux hanya berisi build.sh).
+SHMEM_VERSION="0.4"
+SHMEM_TARBALL="$WORK_DIR/libandroid-shmem-${SHMEM_VERSION}.tar.gz"
+if [ ! -f "$SHMEM_TARBALL" ]; then
+  curl -fsSL --retry 3 -o "$SHMEM_TARBALL.tmp" "https://github.com/termux/libandroid-shmem/archive/v${SHMEM_VERSION}.tar.gz"
+  mv "$SHMEM_TARBALL.tmp" "$SHMEM_TARBALL"
 fi
+SHMEM_SRC="$WORK_DIR/libandroid-shmem-${SHMEM_VERSION}"
+if [ ! -d "$SHMEM_SRC" ]; then
+  tar -xzf "$SHMEM_TARBALL" -C "$WORK_DIR"
+fi
+SHMEM_C=$(find "$SHMEM_SRC" -name "shmem.c" | head -1)
+[ -n "$SHMEM_C" ] || fail "shmem.c tidak ditemukan di libandroid-shmem v${SHMEM_VERSION}"
+log "build libandroid-shmem (statis)"
+$CC -O2 -fPIC -I"$SHMEM_SRC/include" -I"$SHMEM_SRC" -c "$SHMEM_C" -o "$WORK_DIR/shmem.o"
+$AR rcs "$PREFIX/lib/libandroid-shmem.a" "$WORK_DIR/shmem.o"
+if [ -d "$SHMEM_SRC/include" ]; then
+  cp -r "$SHMEM_SRC/include/." "$PREFIX/include/"
+fi
+SHIM_LIBS="$SHIM_LIBS -landroid-shmem"
+SHIM_STATUS="libandroid-shmem"
 if [ -f "$TERMUX_DIR/packages/libandroid-execinfo/execinfo.c" ]; then
   log "build libandroid-execinfo (statis)"
   if $CC -O2 -fPIC -c "$TERMUX_DIR/packages/libandroid-execinfo/execinfo.c" -o "$WORK_DIR/execinfo.o"; then
@@ -283,7 +295,7 @@ rm -f "$OUT_DIR/postgres-share.zip"
 verify_elf() {
   local so="$1"
   file "$so"
-  readelf -h "$so" | grep -q "AArch64" || fail "$so bukan ELF AArch64"
+  readelf -h "$so" | grep "AArch64" >/dev/null || fail "$so bukan ELF AArch64"
   readelf -l "$so" | grep -q "/system/bin/linker64" || fail "$so interpreter bukan /system/bin/linker64"
   local lib
   for lib in $(readelf -d "$so" | grep NEEDED | sed -E 's/.*\[(.*)\]/\1/'); do

@@ -208,8 +208,11 @@ cmake -S "$MARIADB_SRC" -B "$TARGET_BUILD" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DANDROID_STL=c++_static \
   -DCMAKE_PREFIX_PATH="$PREFIX" \
   -DIMPORT_EXECUTABLES="$HOST_BUILD/import_executables.cmake" \
-  -DWITH_SSL=system \
+  -DWITH_SSL=openssl \
   -DOPENSSL_ROOT_DIR="$PREFIX" \
+  -DOPENSSL_INCLUDE_DIR="$PREFIX/include" \
+  -DOPENSSL_SSL_LIBRARY="$PREFIX/lib/libssl.a" \
+  -DOPENSSL_CRYPTO_LIBRARY="$PREFIX/lib/libcrypto.a" \
   -DOPENSSL_USE_STATIC_LIBS=TRUE \
   -DWITH_ZLIB=system \
   -DZLIB_ROOT="$PREFIX" \
@@ -259,7 +262,7 @@ rm -f "$OUT_DIR/mariadb-share.zip"
 verify_elf() {
   local so="$1"
   file "$so"
-  readelf -h "$so" | grep -q "AArch64" || fail "$so bukan ELF AArch64"
+  readelf -h "$so" | grep "AArch64" >/dev/null || fail "$so bukan ELF AArch64"
   readelf -l "$so" | grep -q "/system/bin/linker64" || fail "$so interpreter bukan /system/bin/linker64"
   local lib
   for lib in $(readelf -d "$so" | grep NEEDED | sed -E 's/.*\[(.*)\]/\1/'); do

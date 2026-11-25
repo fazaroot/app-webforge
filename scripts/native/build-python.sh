@@ -245,45 +245,45 @@ force_static_modules() {
 import pathlib
 import sys
 
-setup = pathlib.Path("Modules/Setup.stdlib")
-if not setup.is_file():
-    setup = pathlib.Path("Modules/Setup")
+setup_files = [pathlib.Path("Modules/Setup.stdlib"), pathlib.Path("Modules/Setup")]
+setup_files = [f for f in setup_files if f.is_file()]
 local = pathlib.Path("Modules/Setup.local")
 targets = {
     "_ssl", "_hashlib", "_sqlite3", "_ctypes", "_socket", "_json",
     "_asyncio", "_multiprocessing", "_queue", "_datetime", "_decimal",
-    "_zlib", "_bz2", "_lzma", "_struct", "_random", "_bisect", "_heapq",
+    "zlib", "_bz2", "_lzma", "_struct", "_random", "_bisect", "_heapq",
 }
-critical = {"_ssl", "_hashlib", "_sqlite3", "_socket", "_zlib"}
-if not setup.is_file():
+critical = {"_ssl", "_hashlib", "_sqlite3", "_socket", "zlib"}
+if not setup_files:
     print("Modules/Setup.stdlib/Setup tidak ditemukan setelah configure", file=sys.stderr)
     raise SystemExit(1)
 
 moved = []
-kept = []
 found = set()
-for line in setup.read_text().splitlines():
-    stripped = line.strip()
-    if not stripped or stripped.startswith("#") or stripped.startswith("*"):
-        kept.append(line)
-        continue
-    first = stripped.split()[0]
-    if first in targets:
-        moved.append(line)
-        found.add(first)
-    else:
-        kept.append(line)
+for setup in setup_files:
+    kept = []
+    for line in setup.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("*"):
+            kept.append(line)
+            continue
+        first = stripped.split()[0]
+        if first in targets:
+            moved.append(line)
+            found.add(first)
+        else:
+            kept.append(line)
+    setup.write_text("\n".join(kept) + "\n")
 
 missing_critical = sorted(critical - found)
 if missing_critical:
-    print(f"Modul kritis tidak ada di {setup}: {missing_critical}", file=sys.stderr)
+    print(f"Modul kritis tidak ada di Setup.stdlib/Setup: {missing_critical}", file=sys.stderr)
     raise SystemExit(1)
 missing = sorted(targets - found)
 if missing:
     print(f"Peringatan: modul nonkritis tidak ditemukan untuk dijadikan statis: {missing}", file=sys.stderr)
 
 local.write_text("*static*\n" + "\n".join(moved) + "\n")
-setup.write_text("\n".join(kept) + "\n")
 print("Modul statis:", ", ".join(sorted(found)))
 PY
 }
@@ -294,7 +294,7 @@ verify_static_modules() {
     echo "Modules/config.c tidak ditemukan; tidak bisa memverifikasi modul statis" >&2
     exit 1
   fi
-  for mod in _ssl _hashlib _sqlite3 _socket _zlib; do
+  for mod in _ssl _hashlib _sqlite3 _socket zlib; do
     if ! grep -q "PyInit_${mod}" "$config_c"; then
       echo "Modul kritis $mod tidak statis di libpython" >&2
       exit 1
@@ -314,7 +314,7 @@ verify_elf() {
     exit 1
   fi
   file "$file" || true
-  if ! "$READELF" -h "$file" | grep -q "AArch64"; then
+  if ! "$READELF" -h "$file" | grep "AArch64" >/dev/null; then
     echo "$file bukan ELF AArch64" >&2
     exit 1
   fi

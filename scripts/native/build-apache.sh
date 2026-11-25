@@ -131,6 +131,7 @@ CROSS_CACHE_VARS=(
   apu_cv_sizeof_ssize_t=8
   apu_cv_sizeof_off_t=8
   apu_cv_sizeof_pid_t=4
+  ap_cv_void_ptr_lt_long=no
 )
 
 # --- expat (statis, via CMake + toolchain NDK) ------------------------------
@@ -219,9 +220,6 @@ rm -rf "$SRC/apr-util-${APR_UTIL_VERSION}"
 tar -xzf "$DL/apr-util.tar.gz" -C "$SRC"
 (
   cd "$SRC/apr-util-${APR_UTIL_VERSION}"
-  # APR-util menguji sizeof(void*) dengan AC_TRY_RUN; fallback cross-compile
-  # bawaannya 4 (salah untuk LP64 aarch64). Paksa fallback yang benar.
-  sed -i 's/apu_cv_sizeof_void_p=4/apu_cv_sizeof_void_p=8/g' configure
   ./configure \
     --host=aarch64-linux-android \
     --build=x86_64-linux-gnu \
@@ -292,7 +290,7 @@ if command -v file >/dev/null 2>&1; then
   file "$OUT"
 fi
 "$READELF" -h "$OUT" | grep -E "Class|Type|Machine"
-if ! "$READELF" -h "$OUT" | grep -q "AArch64"; then
+if ! "$READELF" -h "$OUT" | grep "AArch64" >/dev/null; then
   echo "::error::libhttpd.so bukan ELF AArch64." >&2
   exit 1
 fi

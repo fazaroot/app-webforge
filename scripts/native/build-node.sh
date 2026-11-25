@@ -72,7 +72,7 @@ verify_elf() {
     exit 1
   fi
   file "$file" || true
-  if ! "$READELF" -h "$file" | grep -qi "aarch64"; then
+  if ! "$READELF" -h "$file" | grep -i "aarch64" >/dev/null; then
     "$READELF" -h "$file" || true
     echo "$file bukan ELF AArch64" >&2
     exit 1
@@ -145,7 +145,7 @@ log "Kompilasi shim JNI libwebforge_node.so"
   -Wl,-soname,libwebforge_node.so \
   -o "$OUTPUT_DIR/libwebforge_node.so"
 verify_elf "$OUTPUT_DIR/libwebforge_node.so"
-if ! "$READELF" -d "$OUTPUT_DIR/libwebforge_node.so" | grep -q '\[libnode\.so\]'; then
+if ! "$READELF" -d "$OUTPUT_DIR/libwebforge_node.so" | grep '\[libnode\.so\]' >/dev/null; then
   echo "libwebforge_node.so tidak bergantung pada libnode.so" >&2
   exit 1
 fi
