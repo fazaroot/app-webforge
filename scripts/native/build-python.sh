@@ -357,6 +357,7 @@ build_python() {
       --enable-ipv6 \
       --with-ensurepip=no \
       CC="$CC" CXX="$CXX" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP" \
+      LIBS="-lm -ldl" \
       ac_cv_file__dev_ptmx=no ac_cv_file__dev_ptc=no
     force_static_modules
     make -j"$JOBS"

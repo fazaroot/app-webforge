@@ -173,11 +173,12 @@ fi
 SHMEM_C=$(find "$SHMEM_SRC" -name "shmem.c" | head -1)
 [ -n "$SHMEM_C" ] || fail "shmem.c tidak ditemukan di libandroid-shmem v${SHMEM_VERSION}"
 log "build libandroid-shmem (statis)"
-$CC -O2 -fPIC -I"$SHMEM_SRC/include" -I"$SHMEM_SRC" -c "$SHMEM_C" -o "$WORK_DIR/shmem.o"
+$CC -O2 -fPIC -std=gnu17 -D_GNU_SOURCE -D_PATH_TMP='"/data/local/tmp/"' \
+  -include string.h -include fcntl.h \
+  -I"$SHMEM_SRC" -c "$SHMEM_C" -o "$WORK_DIR/shmem.o"
 $AR rcs "$PREFIX/lib/libandroid-shmem.a" "$WORK_DIR/shmem.o"
-if [ -d "$SHMEM_SRC/include" ]; then
-  cp -r "$SHMEM_SRC/include/." "$PREFIX/include/"
-fi
+mkdir -p "$PREFIX/include/sys"
+cp "$SHMEM_SRC/shm.h" "$PREFIX/include/sys/shm.h"
 SHIM_LIBS="$SHIM_LIBS -landroid-shmem"
 SHIM_STATUS="libandroid-shmem"
 if [ -f "$TERMUX_DIR/packages/libandroid-execinfo/execinfo.c" ]; then

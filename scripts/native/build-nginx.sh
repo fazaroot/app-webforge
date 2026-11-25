@@ -208,6 +208,10 @@ export NGX_WITH_NGX_SYS_NERR=133
 # Bionic API 26 tidak menyediakan crypt.h; jangan klaim NGX_HAVE_CRYPT.
 export NGX_WITH_NGX_HAVE_CRYPT=0
 
+# ngx_linux_config.h meng-include <crypt.h> tanpa syarat; Bionic API 26
+# tidak menyediakannya dan auth_basic dimatikan, jadi include ini aman dibuang.
+sed -i 's|#include <crypt.h>|/* crypt.h tidak tersedia di Bionic API 26 */|' src/os/unix/ngx_linux_config.h
+
 ./configure \
   --prefix=/webforge/nginx \
   --sbin-path=/webforge/nginx \
@@ -230,8 +234,6 @@ export NGX_WITH_NGX_HAVE_CRYPT=0
   --without-http_auth_basic_module \
   --test-build-epoll
 
-# Bionic API 26 tidak menyediakan crypt.h; pastikan NGX_HAVE_CRYPT mati.
-sed -i '/#define NGX_HAVE_CRYPT/d' objs/ngx_auto_config.h
 
 if ! grep -q "NGX_HAVE_EPOLL" objs/ngx_auto_config.h; then
   echo "::warning::NGX_HAVE_EPOLL tidak terdeteksi; Nginx akan memakai poll/select. Periksa log configure."
