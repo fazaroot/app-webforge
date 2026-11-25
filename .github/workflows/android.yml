@@ -286,17 +286,6 @@ jobs:
           export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig"
           export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig"
           export PKG_CONFIG="pkg-config --static"
-          # Bionic tidak menyediakan resolver res_n* yang lengkap
-          # (struct __res_state tidak utuh untuk aplikasi); tanpa ini
-          # ext/standard/dns.c gagal kompilasi. Beri tahu configure
-          # bahwa fungsi-fungsi itu tidak ada.
-          export ac_cv_func_res_init=no
-          export ac_cv_func_res_search=no
-          export ac_cv_func_res_ninit=no
-          export ac_cv_func_res_nsearch=no
-          export ac_cv_func_res_nclose=no
-          export ac_cv_func_dn_skipname=no
-          export ac_cv_func_dn_expand=no
           export CFLAGS="-O2 -fPIC"
           export CPPFLAGS="-I$PREFIX/include"
           export LDFLAGS="-L$PREFIX/lib"
@@ -332,6 +321,14 @@ jobs:
             --with-zip \
             --with-zlib \
             CC="$CC" CXX="$CXX" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP"
+          # Bionic: configure mendeteksi simbol res_n* ada, tetapi
+          # struct __res_state tidak utuh untuk aplikasi sehingga
+          # ext/standard/dns.c gagal kompilasi. Matikan deteksi itu
+          # di php_config.h; fungsi DNS PHP memakai jalur fallback.
+          for sym in HAVE_RES_NINIT HAVE_RES_NSEARCH HAVE_RES_NCLOSE HAVE_RES_SEARCH HAVE_RES_INIT HAVE_DN_SKIPNAME HAVE_DN_EXPAND; do
+            sed -i "s/^#define $sym 1$/\/* #undef $sym *\//" main/php_config.h
+          done
+          grep -E "HAVE_RES_|HAVE_DN_" main/php_config.h || true
           make -j"$(nproc)"
 
       - name: Package libphp.so
