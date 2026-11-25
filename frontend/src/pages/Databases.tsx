@@ -51,7 +51,7 @@ export function Databases() {
   const [notice, setNotice] = useState('');
 
   const dbs = useQuery({ queryKey: ['databases'], queryFn: api.databases });
-  const runtimes = useQuery({ queryKey: ['runtimes'], queryFn: api.runtimes });
+  const runtimes = useQuery({ queryKey: ['runtimes'], queryFn: () => api.runtimes() });
   const tables = useQuery({
     queryKey: ['db-tables', selectedId],
     queryFn: () => api.dbTables(selectedId as string),

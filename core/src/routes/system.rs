@@ -1,6 +1,6 @@
 use crate::state::AppState;
 use crate::util::{db_err, now_iso, ApiError, ApiResult};
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::header;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -17,7 +17,7 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
 }
 
 pub async fn system_info(State(state): State<AppState>) -> Json<Value> {
-    let runtimes = crate::runtime::sync_runtime_table(&state.pool).await;
+    let runtimes = crate::runtime::sync_runtime_table(&state, false).await;
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "os": std::env::consts::OS,
@@ -30,9 +30,54 @@ pub async fn system_info(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
-pub async fn runtimes(State(state): State<AppState>) -> Json<Value> {
-    let runtimes = crate::runtime::sync_runtime_table(&state.pool).await;
+#[derive(Deserialize)]
+pub struct RuntimesQuery {
+    pub fresh: Option<String>,
+}
+
+/// Daftar runtime dari cache probe (TTL 60 detik). `?fresh=1`
+/// memaksa probe ulang semua runtime.
+pub async fn runtimes(State(state): State<AppState>, Query(q): Query<RuntimesQuery>) -> Json<Value> {
+    let fresh = matches!(q.fresh.as_deref(), Some("1") | Some("true"));
+    let runtimes = crate::runtime::sync_runtime_table(&state, fresh).await;
     Json(serde_json::to_value(&runtimes).unwrap_or(json!([])))
+}
+
+/// Probe segar satu runtime; mengembalikan output mentah probe
+/// (stdout/stderr/exit_code/duration_ms) sebagai bukti nyata.
+pub async fn runtime_test(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    match crate::runtime::test_runtime(&state, &id).await {
+        Some((info, probe)) => {
+            // Cache sudah diperbarui test_runtime; sinkronkan tabel
+            // dari cache yang sama.
+            let _ = crate::runtime::sync_runtime_table(&state, false).await;
+            Ok(Json(json!({
+                "id": info.id,
+                "ok": probe.ok,
+                "version": probe.version,
+                "stdout": probe.stdout,
+                "stderr": probe.stderr,
+                "exit_code": probe.exit_code,
+                "duration_ms": probe.duration_ms,
+                "error": probe.error,
+            })))
+        }
+        None => Err(ApiError::not_found(format!("Runtime {} tidak dikenal", id))),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SelfTestBody {
+    pub engines: Option<Vec<String>>,
+}
+
+/// Self-test nyata semua engine (atau subset lewat body
+/// `{"engines":[...]}`): start server temp, verifikasi marker via
+/// HTTP / SELECT 1, stop, bersihkan.
+pub async fn self_test(State(state): State<AppState>, body: Option<Json<SelfTestBody>>) -> Json<Value> {
+    let engines = body.and_then(|Json(b)| b.engines);
+    let results = crate::selftest::run_self_test(&state, engines).await;
+    Json(json!({"results": serde_json::to_value(&results).unwrap_or(json!([]))}))
 }
 
 pub async fn diagnostics(State(state): State<AppState>) -> ApiResult<Json<Value>> {
@@ -59,7 +104,7 @@ pub async fn diagnostics(State(state): State<AppState>) -> ApiResult<Json<Value>
         Err(e) => check("Database", "error", format!("SQLite error: {}", e)),
     }
     check("Management API", "ok", format!("Bind 127.0.0.1:{}", state.config.port));
-    let runtimes = crate::runtime::sync_runtime_table(&state.pool).await;
+    let runtimes = crate::runtime::sync_runtime_table(&state, false).await;
     let unavailable: Vec<String> = runtimes.iter().filter(|r| !r.available).map(|r| r.name.clone()).collect();
     if unavailable.is_empty() {
         check("Runtimes", "ok", "Semua runtime tersedia".to_string());

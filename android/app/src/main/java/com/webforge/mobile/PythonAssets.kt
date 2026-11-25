@@ -22,6 +22,7 @@ import java.util.zip.ZipInputStream
  *
  * Mengembalikan false apa adanya bila asset tidak ada atau ekstrak gagal;
  * tidak ada klaim stdlib siap tanpa marker dan folder hasil ekstrak.
+ * Sejak v0.3.1 dipanggil async oleh CoreBridge setelah nativeStart.
  */
 object PythonAssets {
 
@@ -30,14 +31,22 @@ object PythonAssets {
     private const val ASSET_VERSION = "python-version.txt"
     private const val MARKER_NAME = ".stdlib-version"
 
-    fun ensureStdlib(context: Context): Boolean {
+    fun ensureStdlib(context: Context): Boolean = ensureStdlibDetailed(context).first
+
+    /**
+     * Sama seperti [ensureStdlib] tetapi mengembalikan pesan kegagalan
+     * persisnya (second) agar CoreBridge bisa melaporkannya jujur lewat
+     * assetState/log startup. second null bila sukses.
+     */
+    fun ensureStdlibDetailed(context: Context): Pair<Boolean, String?> {
         return try {
             val assetVersion = context.assets.open(ASSET_VERSION).bufferedReader().use {
                 it.readText().trim()
             }
             if (assetVersion.isEmpty()) {
-                Log.e(TAG, "Asset $ASSET_VERSION kosong")
-                return false
+                val message = "Asset $ASSET_VERSION kosong"
+                Log.e(TAG, message)
+                return Pair(false, message)
             }
 
             val pythonRoot = File(CoreBridge.dataDir(context), "python")
@@ -49,32 +58,35 @@ object PythonAssets {
 
             if (currentVersion == assetVersion && zipFile.isFile && stdlibDir.isDirectory) {
                 Log.i(TAG, "Stdlib Python $assetVersion sudah terpasang")
-                return true
+                return Pair(true, null)
             }
 
             if (!pythonRoot.exists() && !pythonRoot.mkdirs()) {
-                Log.e(TAG, "Gagal membuat folder ${pythonRoot.absolutePath}")
-                return false
+                val message = "Gagal membuat folder ${pythonRoot.absolutePath}"
+                Log.e(TAG, message)
+                return Pair(false, message)
             }
 
             context.assets.open(ASSET_ZIP).use { input ->
                 FileOutputStream(zipFile).use { output -> input.copyTo(output) }
             }
             if (stdlibDir.exists() && !stdlibDir.deleteRecursively()) {
-                Log.e(TAG, "Gagal menghapus stdlib lama ${stdlibDir.absolutePath}")
-                return false
+                val message = "Gagal menghapus stdlib lama ${stdlibDir.absolutePath}"
+                Log.e(TAG, message)
+                return Pair(false, message)
             }
             if (!stdlibDir.mkdirs()) {
-                Log.e(TAG, "Gagal membuat folder ${stdlibDir.absolutePath}")
-                return false
+                val message = "Gagal membuat folder ${stdlibDir.absolutePath}"
+                Log.e(TAG, message)
+                return Pair(false, message)
             }
             extractZip(zipFile, stdlibDir)
             marker.writeText(assetVersion)
             Log.i(TAG, "Stdlib Python $assetVersion diekstrak ke ${stdlibDir.absolutePath}")
-            true
+            Pair(true, null)
         } catch (e: Exception) {
             Log.e(TAG, "Gagal menyiapkan stdlib Python", e)
-            false
+            Pair(false, e.message ?: e.javaClass.simpleName)
         }
     }
 

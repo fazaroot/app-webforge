@@ -89,8 +89,9 @@ class WebForgeService : Service() {
             }
             else -> {
                 // ACTION_START atau restart oleh sistem (intent null dengan
-                // START_STICKY): tampilkan notifikasi dulu (batas 5 detik),
-                // lalu mulai core.
+                // START_STICKY): startForeground dipanggil segera di sini,
+                // sebelum pekerjaan berat apa pun (batas 5 detik Android),
+                // lalu core dimulai di thread latar.
                 stopping = false
                 // Start eksplisit memberi watchdog kesempatan baru.
                 consecutiveRestartFailures = 0
@@ -274,6 +275,7 @@ class WebForgeService : Service() {
         if (isCoreHealthy()) {
             if (consecutiveRestartFailures > 0 || watchdogGaveUp || watchdogErrorShown) {
                 Log.i(TAG, "Core kembali sehat; counter watchdog direset")
+                CoreBridge.logStartup("Watchdog: core kembali sehat; counter watchdog direset")
             }
             consecutiveRestartFailures = 0
             watchdogGaveUp = false
@@ -335,6 +337,7 @@ class WebForgeService : Service() {
         for (attempt in 1..MAX_RESTART_ATTEMPTS) {
             if (stopping) return
             Log.w(TAG, "Core tidak merespons, memulai ulang (percobaan $attempt/$MAX_RESTART_ATTEMPTS)")
+            CoreBridge.logStartup("Watchdog: core tidak merespons, memulai ulang (percobaan $attempt/$MAX_RESTART_ATTEMPTS)")
             watchdogErrorShown = true
             updateNotification(
                 buildNotification(
@@ -356,15 +359,18 @@ class WebForgeService : Service() {
                 watchdogGaveUp = false
                 watchdogErrorShown = false
                 Log.i(TAG, "Core berhasil dimulai ulang pada percobaan $attempt")
+                CoreBridge.logStartup("Watchdog: core berhasil dimulai ulang pada percobaan $attempt")
                 updateNotification(buildNotification(running = true, error = null))
                 evaluateWakeLock()
                 return
             }
             consecutiveRestartFailures = attempt
             Log.w(TAG, "Percobaan restart core ke-$attempt gagal")
+            CoreBridge.logStartup("Watchdog: percobaan restart core ke-$attempt gagal")
         }
         watchdogGaveUp = true
         Log.e(TAG, "Core gagal dimulai ulang setelah $MAX_RESTART_ATTEMPTS percobaan; watchdog berhenti mencoba")
+        CoreBridge.logStartup("Watchdog: core gagal dimulai ulang setelah $MAX_RESTART_ATTEMPTS percobaan; watchdog berhenti mencoba")
         updateNotification(
             buildNotification(
                 running = false,

@@ -77,9 +77,19 @@ async fn run_capture(
 ) -> Result<(bool, String), String> {
     let mut cmd = tokio::process::Command::new(program);
     cmd.args(args);
-    if let Some(cwd) = cwd {
-        cmd.current_dir(cwd);
-    }
+    // Environment spawn terpusat lebih dulu; env pemanggil menimpa.
+    let home = envs
+        .iter()
+        .find(|(k, _)| k == "HOME")
+        .map(|(_, v)| PathBuf::from(v))
+        .or_else(crate::state::data_dir)
+        .unwrap_or_else(|| std::env::temp_dir().join("webforge-probe"));
+    crate::util::prepare_spawn(
+        &mut cmd,
+        crate::state::native_lib_dir().as_deref(),
+        &home,
+        cwd,
+    );
     for (k, v) in envs {
         cmd.env(k, v);
     }

@@ -300,15 +300,23 @@ impl PhpInfo {
 }
 
 async fn run_php_capture(binary: &Path, arg: &str) -> Result<std::process::Output, String> {
-    match tokio::time::timeout(
-        Duration::from_secs(5),
-        tokio::process::Command::new(binary).arg(arg).output(),
-    )
-    .await
-    {
+    let mut cmd = tokio::process::Command::new(binary);
+    cmd.arg(arg);
+    let home = crate::state::data_dir()
+        .unwrap_or_else(|| std::env::temp_dir().join("webforge-probe"));
+    crate::util::prepare_spawn(
+        &mut cmd,
+        crate::state::native_lib_dir().as_deref(),
+        &home,
+        Some(&home),
+    );
+    match tokio::time::timeout(crate::runtime::PROBE_TIMEOUT, cmd.output()).await {
         Ok(Ok(out)) => Ok(out),
         Ok(Err(e)) => Err(format!("Gagal menjalankan PHP: {}", e)),
-        Err(_) => Err("PHP tidak merespons dalam 5 detik".to_string()),
+        Err(_) => Err(format!(
+            "PHP tidak merespons dalam {} detik",
+            crate::runtime::PROBE_TIMEOUT.as_secs()
+        )),
     }
 }
 

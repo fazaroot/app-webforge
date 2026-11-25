@@ -115,7 +115,7 @@ pub async fn create_server(
             ));
         }
     } else if body.engine != "static" {
-        let runtimes = crate::runtime::detect_runtimes().await;
+        let runtimes = crate::runtime::runtimes_cached(&state, false).await;
         let available = runtimes.iter().any(|r| r.id == body.engine && r.available);
         if !available {
             return Err(ApiError::new(

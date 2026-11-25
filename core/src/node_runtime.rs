@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeProjectInfo {
@@ -308,6 +308,78 @@ pub fn choose_node_entry(
     )
 }
 
+// ---------------------------------------------------------------------------
+// Probe Node nyata lewat NodeService (kontrak file)
+// ---------------------------------------------------------------------------
+//
+// Core menulis `<data_dir>/node-probe/request.json` berisi {nonce} dan
+// skrip probe, lalu memulai NodeService dengan argumen skrip probe +
+// flag `--webforge-probe`. Skrip membaca request.json dari foldernya
+// sendiri dan menulis `result.json` berisi {nonce, version, error}
+// dengan `process.version` Node yang benar-benar berjalan. Core
+// menunggu result.json maksimal 6 detik; timeout atau nonce tidak cocok
+// berarti Node dianggap tidak tersedia dengan error persisnya.
+
+/// Flag argumen penanda mode probe untuk NodeService/skrip probe.
+pub const NODE_PROBE_FLAG: &str = "--webforge-probe";
+
+/// Folder kontrak probe Node: `<data_dir>/node-probe`.
+pub fn node_probe_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("node-probe")
+}
+
+pub fn node_probe_script_path(data_dir: &Path) -> PathBuf {
+    node_probe_dir(data_dir).join("probe.js")
+}
+
+/// Isi skrip probe Node. Skrip membaca request.json di foldernya
+/// sendiri (`__dirname`) dan menulis result.json; kegagalan apa pun
+/// ditulis sebagai field error agar core bisa melaporkannya persis.
+pub fn node_probe_script() -> &'static str {
+    "const fs = require('fs');\n\
+     const path = require('path');\n\
+     const dir = __dirname;\n\
+     let nonce = null;\n\
+     try {\n\
+     \x20 const req = JSON.parse(fs.readFileSync(path.join(dir, 'request.json'), 'utf8'));\n\
+     \x20 nonce = req.nonce || null;\n\
+     \x20 fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({ nonce: nonce, version: process.version, error: null }));\n\
+     \x20 console.log(process.version);\n\
+     } catch (e) {\n\
+     \x20 try { fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({ nonce: nonce, version: null, error: String((e && e.message) || e) })); } catch (_) {}\n\
+     \x20 process.exitCode = 1;\n\
+     }\n"
+}
+
+/// Argumen NodeService untuk mode probe: skrip probe + flag probe.
+pub fn node_probe_args(script_path: &Path) -> Vec<String> {
+    vec![
+        script_path.to_string_lossy().to_string(),
+        NODE_PROBE_FLAG.to_string(),
+    ]
+}
+
+/// Hasil probe Node dari result.json.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct NodeProbeResult {
+    pub nonce: Option<String>,
+    pub version: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Parse result.json probe Node dan verifikasi nonce-nya cocok dengan
+/// request yang ditulis core. Nonce tidak cocok berarti hasil basi dari
+/// probe sebelumnya dan tidak boleh dipercaya.
+pub fn parse_node_probe_result(text: &str, expected_nonce: &str) -> Result<NodeProbeResult, String> {
+    let result: NodeProbeResult = serde_json::from_str(text)
+        .map_err(|e| format!("result.json probe Node tidak valid: {}", e))?;
+    match result.nonce.as_deref() {
+        Some(nonce) if nonce == expected_nonce => Ok(result),
+        Some(_) => Err("Nonce hasil probe Node tidak cocok dengan request (hasil basi)".to_string()),
+        None => Err("Hasil probe Node tidak berisi nonce".to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,6 +495,57 @@ mod tests {
         let info = inspect_node_project(&d);
         assert!(choose_node_entry(&info, &d, None, "127.0.0.1", 3000).is_err());
         std::fs::remove_dir_all(d).ok();
+    }
+
+    #[test]
+    fn parse_node_probe_result_valid() {
+        let r = parse_node_probe_result(
+            r#"{"nonce":"abc-123","version":"v18.20.4","error":null}"#,
+            "abc-123",
+        )
+        .unwrap();
+        assert_eq!(r.version.as_deref(), Some("v18.20.4"));
+        assert!(r.error.is_none());
+    }
+
+    #[test]
+    fn parse_node_probe_result_error_field() {
+        let r = parse_node_probe_result(
+            r#"{"nonce":"n1","version":null,"error":"request.json hilang"}"#,
+            "n1",
+        )
+        .unwrap();
+        assert_eq!(r.error.as_deref(), Some("request.json hilang"));
+        assert!(r.version.is_none());
+    }
+
+    #[test]
+    fn parse_node_probe_result_rejects_stale_nonce_and_garbage() {
+        assert!(parse_node_probe_result(
+            r#"{"nonce":"lama","version":"v18.20.4","error":null}"#,
+            "baru",
+        )
+        .is_err());
+        assert!(parse_node_probe_result(r#"{"version":"v18.20.4"}"#, "x").is_err());
+        assert!(parse_node_probe_result("bukan json", "x").is_err());
+    }
+
+    #[test]
+    fn node_probe_contract_paths_args_and_script() {
+        let data = Path::new("/data/webforge");
+        assert_eq!(node_probe_dir(data), PathBuf::from("/data/webforge/node-probe"));
+        assert_eq!(
+            node_probe_script_path(data),
+            PathBuf::from("/data/webforge/node-probe/probe.js")
+        );
+        assert_eq!(
+            node_probe_args(&node_probe_script_path(data)),
+            vec!["/data/webforge/node-probe/probe.js", "--webforge-probe"]
+        );
+        let script = node_probe_script();
+        assert!(script.contains("request.json"));
+        assert!(script.contains("result.json"));
+        assert!(script.contains("process.version"));
     }
 
     #[test]

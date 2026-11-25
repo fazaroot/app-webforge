@@ -61,6 +61,11 @@ pub struct AppState {
     pub processes: Arc<Mutex<HashMap<String, ProcessHandle>>>,
     pub native_lib_dir: Option<PathBuf>,
     pub php_info_cache: Arc<Mutex<Option<(Instant, crate::php::PhpInfo)>>>,
+    /// Cache hasil probe runtime (TTL 60 detik, lihat runtime.rs).
+    pub runtime_cache: Arc<crate::runtime::RuntimeCache>,
+    /// Ekor stderr per server (in-memory, dibatasi process.rs) untuk
+    /// error_message jujur saat health check gagal.
+    pub process_stderr: Arc<Mutex<HashMap<String, std::collections::VecDeque<String>>>>,
 }
 
 impl AppState {

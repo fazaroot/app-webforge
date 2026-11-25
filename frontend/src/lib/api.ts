@@ -1,10 +1,10 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import type {
-  ActionOutput, BackupResult, CreateDatabaseBody, CreateServerBody, DatabaseInfo, Diagnostics, DirSize, FileEntry, FileRead, FileSearchHit,
+  ActionOutput, BackupResult, CoreStatus, CreateDatabaseBody, CreateServerBody, DatabaseInfo, Diagnostics, DirSize, FileEntry, FileRead, FileSearchHit,
   FrameworkInfo, GitStatus, Health, LogEntry, MonitoringCurrent, MonitoringPoint, NetworkInfo,
   NodeProjectInfo, PhpCliResult, PhpRuntimeInfo, PhpSettings, PowerStatus, PythonProjectInfo, PythonRuntimeInfo,
-  Project, QueryResult, RuntimeInfo, SecurityStatus, ServerConfig, ServerInstance, ServerLog, SettingsMap,
-  SystemInfo, TableInfo, TerminalHistoryItem, TerminalResult, TestConnectionResult, ValidateConfigResult,
+  Project, QueryResult, RuntimeInfo, RuntimeTestResult, SecurityStatus, SelfTestResponse, ServerConfig, ServerInstance, ServerLog, SettingsMap,
+  StartupLogEntry, SystemInfo, TableInfo, TerminalHistoryItem, TerminalResult, TestConnectionResult, ValidateConfigResult,
 } from './types';
 
 export interface PickDirectoryResult {
@@ -17,6 +17,7 @@ interface WebForgePlugin {
   getApiBase(): Promise<{ value: string } | string>;
   getToken(): Promise<{ value: string } | string>;
   getStatus(): Promise<Record<string, unknown>>;
+  getStartupLog(): Promise<{ entries: StartupLogEntry[] }>;
   startCore(): Promise<Record<string, unknown>>;
   stopCore(): Promise<Record<string, unknown>>;
   pickDirectory(): Promise<PickDirectoryResult>;
@@ -125,6 +126,47 @@ export async function requestIgnoreBatteryOptimizations(): Promise<{ ignoringBat
   return plugin.requestIgnoreBatteryOptimizations();
 }
 
+/** Menyalakan WebForge Core lewat plugin native. Hanya di aplikasi Android. */
+export async function startCore(): Promise<void> {
+  if (!isNativeWebForge() || !plugin) {
+    throw new Error('Menyalakan core hanya tersedia di aplikasi Android.');
+  }
+  await plugin.startCore();
+}
+
+function statusString(v: unknown): string | null {
+  if (typeof v === 'string') return v === '' ? null : v;
+  if (v === null || v === undefined) return null;
+  return JSON.stringify(v);
+}
+
+/** Memetakan respons mentah getStatus plugin ke status startup core bertipe. */
+export function parseCoreStatus(raw: Record<string, unknown>): CoreStatus {
+  return {
+    startupState: statusString(raw.startupState ?? raw.startup_state),
+    assetState: statusString(raw.assetState ?? raw.asset_state),
+    loadError: statusString(raw.loadError ?? raw.load_error),
+  };
+}
+
+/** Status startup core nyata dari plugin native (startupState, assetState, loadError). */
+export async function getCoreStatus(): Promise<CoreStatus> {
+  if (!isNativeWebForge() || !plugin) {
+    throw new Error('Status startup core hanya tersedia di aplikasi Android.');
+  }
+  return parseCoreStatus(await plugin.getStatus());
+}
+
+/** Log startup core dari plugin native: entri ts + message apa adanya. */
+export async function getStartupLog(): Promise<StartupLogEntry[]> {
+  if (!isNativeWebForge() || !plugin) {
+    throw new Error('Log startup core hanya tersedia di aplikasi Android.');
+  }
+  const r = await plugin.getStartupLog();
+  const entries = Array.isArray(r?.entries) ? r.entries : [];
+  return entries.map((e) => ({ ts: String(e?.ts ?? ''), message: String(e?.message ?? '') }));
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -171,7 +213,12 @@ export const api = {
   health: () => request<Health>('/api/health'),
   systemInfo: () => request<SystemInfo>('/api/system/info'),
   diagnostics: () => request<Diagnostics>('/api/system/diagnostics'),
-  runtimes: () => request<RuntimeInfo[]>('/api/runtimes'),
+  selfTest: () => request<SelfTestResponse>('/api/diagnostics/self-test', { method: 'POST' }),
+  // fresh=true memaksa probe ulang di core (?fresh=1); nilai lain memakai cache core.
+  // Pemeriksaan === true penting: react-query meneruskan konteks ke queryFn.
+  runtimes: (fresh?: boolean) => request<RuntimeInfo[]>(`/api/runtimes${fresh === true ? '?fresh=1' : ''}`),
+  testRuntime: (id: string) =>
+    request<RuntimeTestResult>(`/api/runtimes/${encodeURIComponent(id)}/test`, { method: 'POST' }),
 
   projects: () => request<Project[]>('/api/projects'),
   createProject: (name: string, template?: string) =>

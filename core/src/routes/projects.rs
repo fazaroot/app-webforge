@@ -69,7 +69,7 @@ pub async fn get_project_row(pool: &sqlx::SqlitePool, id: &str) -> ApiResult<sql
 }
 
 pub async fn run_scan(state: &AppState, project_id: &str, project_path: &str) -> ApiResult<Value> {
-    let available = crate::runtime::available_runtime_ids().await;
+    let available = crate::runtime::available_runtime_ids(state).await;
     let info = crate::framework::detect(&PathBuf::from(project_path), &available);
     let now = now_iso();
     sqlx::query("DELETE FROM project_frameworks WHERE project_id=?1")

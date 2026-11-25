@@ -146,6 +146,59 @@ pub fn is_inside(base: &Path, target: &Path) -> bool {
     target_canon.starts_with(&base_canon)
 }
 
+/// Komposisi environment spawn terpusat (murni, tanpa efek samping):
+/// `LD_LIBRARY_PATH` ke nativeLibraryDir bila ada (binary .so bundled
+/// bisa membutuhkan library pendamping di folder yang sama), `HOME` ke
+/// folder basis aplikasi, `TMPDIR` ke `<basis>/tmp`. Nilai
+/// `LD_LIBRARY_PATH` lama dipertahankan di belakang path native.
+pub fn compose_spawn_env(
+    native_lib_dir: Option<&Path>,
+    home: &Path,
+    existing_ld_library_path: Option<&str>,
+) -> Vec<(String, String)> {
+    let mut env = Vec::new();
+    if let Some(dir) = native_lib_dir {
+        let dir_str = dir.to_string_lossy().to_string();
+        let value = match existing_ld_library_path.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            Some(existing) if existing != dir_str => format!("{}:{}", dir_str, existing),
+            _ => dir_str,
+        };
+        env.push(("LD_LIBRARY_PATH".to_string(), value));
+    }
+    env.push(("HOME".to_string(), home.to_string_lossy().to_string()));
+    env.push((
+        "TMPDIR".to_string(),
+        home.join("tmp").to_string_lossy().to_string(),
+    ));
+    env
+}
+
+/// Environment spawn terpusat dari kondisi proses saat ini.
+pub fn spawn_env(native_lib_dir: Option<&Path>, home: &Path) -> Vec<(String, String)> {
+    let existing = std::env::var("LD_LIBRARY_PATH").ok();
+    compose_spawn_env(native_lib_dir, home, existing.as_deref())
+}
+
+/// Terapkan environment spawn terpusat ke perintah anak: buat folder
+/// `HOME`, `<HOME>/tmp`, dan cwd (bila diberikan) agar cwd selalu valid,
+/// lalu set env + current_dir. Environment khusus pemanggil diterapkan
+/// sesudah fungsi ini sehingga bisa menimpa nilai bawaan.
+pub fn prepare_spawn(
+    cmd: &mut tokio::process::Command,
+    native_lib_dir: Option<&Path>,
+    home: &Path,
+    cwd: Option<&Path>,
+) {
+    let _ = std::fs::create_dir_all(home);
+    let _ = std::fs::create_dir_all(home.join("tmp"));
+    let work_dir = cwd.unwrap_or(home);
+    let _ = std::fs::create_dir_all(work_dir);
+    cmd.current_dir(work_dir);
+    for (k, v) in spawn_env(native_lib_dir, home) {
+        cmd.env(k, v);
+    }
+}
+
 pub fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -162,6 +215,32 @@ mod tests {
         assert_eq!(slugify("My Cool Project!"), "my-cool-project");
         assert_eq!(slugify("  --A--  "), "a");
         assert_eq!(slugify("!!!"), "project");
+    }
+
+    #[test]
+    fn spawn_env_composition() {
+        let env = compose_spawn_env(
+            Some(Path::new("/data/app/lib")),
+            Path::new("/data/webforge"),
+            None,
+        );
+        assert!(env.contains(&("LD_LIBRARY_PATH".to_string(), "/data/app/lib".to_string())));
+        assert!(env.contains(&("HOME".to_string(), "/data/webforge".to_string())));
+        assert!(env.contains(&("TMPDIR".to_string(), "/data/webforge/tmp".to_string())));
+
+        let env = compose_spawn_env(
+            Some(Path::new("/data/app/lib")),
+            Path::new("/data/webforge"),
+            Some("/usr/lib"),
+        );
+        assert!(env.contains(&(
+            "LD_LIBRARY_PATH".to_string(),
+            "/data/app/lib:/usr/lib".to_string()
+        )));
+
+        let env = compose_spawn_env(None, Path::new("/data/webforge"), None);
+        assert!(!env.iter().any(|(k, _)| k == "LD_LIBRARY_PATH"));
+        assert_eq!(env.len(), 2);
     }
 
     #[test]

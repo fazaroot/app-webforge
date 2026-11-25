@@ -5,7 +5,9 @@ import {
   Server, Settings as SettingsIcon, ShieldCheck, Sun, TerminalSquare, Wrench, X,
 } from 'lucide-react';
 import { api } from './lib/api';
+import { useCoreBootstrap } from './lib/useCoreBootstrap';
 import { OfflineBanner } from './components/OfflineBanner';
+import { SkeletonCard } from './components/ui';
 import { useAppStore, type Section } from './store';
 import { Dashboard } from './pages/Dashboard';
 import { Projects } from './pages/Projects';
@@ -48,6 +50,12 @@ export default function App() {
   );
 
   const health = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 15000, retry: 1 });
+  const boot = useCoreBootstrap();
+  // Native: selama bootstrap berjalan tampilkan skeleton "Menyalakan core…",
+  // banner offline hanya setelah polling backoff habis. Web: perilaku lama.
+  const coreStarting = boot.phase === 'starting';
+  const coreFailed = boot.phase === 'failed' && !health.isSuccess;
+  const showOfflineBanner = coreFailed || (boot.phase === 'web' && health.isError);
 
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
@@ -91,8 +99,8 @@ export default function App() {
         >
           {isDark ? <Sun size={20} /> : <Moon size={20} />}
         </button>
-        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${health.isSuccess ? 'bg-success' : 'bg-danger'}`}>
-          {health.isSuccess ? 'Core online' : health.isLoading ? 'Menghubungi…' : 'Core offline'}
+        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${health.isSuccess ? 'bg-success' : coreStarting ? 'bg-warning' : 'bg-danger'}`}>
+          {health.isSuccess ? 'Core online' : coreStarting ? 'Menyalakan core…' : health.isLoading ? 'Menghubungi…' : 'Core offline'}
         </span>
       </header>
 
@@ -117,7 +125,20 @@ export default function App() {
       )}
 
       <main className="flex-1 w-full max-w-3xl mx-auto px-4 py-4 pb-24 space-y-4">
-        {health.isError && <OfflineBanner onRetry={() => void health.refetch()} retrying={health.isFetching} />}
+        {showOfflineBanner && (
+          <OfflineBanner
+            onRetry={() => { if (boot.phase === 'web') void health.refetch(); else boot.retry(); }}
+            retrying={boot.phase === 'web' ? health.isFetching : coreStarting}
+            loadError={boot.phase === 'web' ? null : boot.loadError}
+          />
+        )}
+        {coreStarting ? (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600 dark:text-slate-400" role="status">Menyalakan core…</p>
+            <SkeletonCard lines={4} />
+            <SkeletonCard lines={3} />
+          </div>
+        ) : (<>
         {section === 'dashboard' && <Dashboard />}
         {section === 'projects' && <Projects />}
         {section === 'servers' && <Servers />}
@@ -130,6 +151,7 @@ export default function App() {
         {section === 'tools' && <Tools />}
         {section === 'security' && <Security />}
         {section === 'settings' && <Settings />}
+        </>)}
       </main>
 
       <nav className="bottom-nav fixed bottom-0 left-0 right-0 z-30 bg-surface dark:bg-darksurface border-t border-slate-200 dark:border-slate-700">

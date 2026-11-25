@@ -11,6 +11,7 @@ pub mod python_runtime;
 pub mod routes;
 pub mod runtime;
 pub mod secrets;
+pub mod selftest;
 pub mod state;
 pub mod templates;
 pub mod util;
@@ -54,7 +55,6 @@ pub async fn run_static_server(
 async fn build_state(config: Config) -> Result<AppState, Box<dyn std::error::Error + Send + Sync>> {
     state::set_data_dir(config.data_dir.clone());
     let pool = db::init_pool(&config).await?;
-    let _ = runtime::sync_runtime_table(&pool).await;
     let state = AppState {
         pool,
         config,
@@ -63,7 +63,12 @@ async fn build_state(config: Config) -> Result<AppState, Box<dyn std::error::Err
         processes: Arc::new(Mutex::new(HashMap::new())),
         native_lib_dir: state::native_lib_dir(),
         php_info_cache: Arc::new(Mutex::new(None)),
+        runtime_cache: Arc::new(runtime::RuntimeCache::new()),
+        process_stderr: Arc::new(Mutex::new(HashMap::new())),
     };
+    // Probe runtime sekali saat core start; hasilnya masuk cache TTL
+    // 60 detik dan tabel runtime_versions.
+    let _ = runtime::sync_runtime_table(&state, false).await;
     monitoring::spawn_sampler(state.pool.clone(), state.config.workspace_dir.clone());
     Ok(state)
 }

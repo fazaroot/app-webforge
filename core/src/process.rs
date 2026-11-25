@@ -134,17 +134,71 @@ async fn wait_healthy(port: u16, timeout: Duration) -> bool {
     false
 }
 
+/// Kapasitas buffer stderr per proses (baris). error_message hanya
+/// mengambil 10 baris terakhir; buffer menyimpan lebih banyak agar
+/// konteks kegagalan tidak hilang.
+pub(crate) const STDERR_BUFFER_CAP: usize = 50;
+const STDERR_LINE_MAX_CHARS: usize = 500;
+
+/// Tambahkan satu baris ke buffer ekor stderr dengan batas kapasitas.
+pub(crate) fn push_capped_line(buf: &mut std::collections::VecDeque<String>, line: String) {
+    let line: String = line.chars().take(STDERR_LINE_MAX_CHARS).collect();
+    buf.push_back(line);
+    while buf.len() > STDERR_BUFFER_CAP {
+        buf.pop_front();
+    }
+}
+
+async fn push_stderr_line(state: &AppState, server_id: &str, line: &str) {
+    let mut map = state.process_stderr.lock().await;
+    let buf = map.entry(server_id.to_string()).or_default();
+    push_capped_line(buf, line.to_string());
+}
+
+/// Ambil `n` baris stderr terakhir satu server dari buffer in-memory.
+async fn stderr_tail(state: &AppState, server_id: &str, n: usize) -> Vec<String> {
+    let map = state.process_stderr.lock().await;
+    match map.get(server_id) {
+        Some(buf) => buf.iter().rev().take(n).rev().cloned().collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Susun error_message health check dari ekor stderr proses (maks 10
+/// baris terakhir). Tanpa output stderr, pesan menyatakan itu apa
+/// adanya, bukan mengarang penyebab.
+pub(crate) fn compose_health_error(timeout_secs: u64, tail: &[String]) -> String {
+    let tail: Vec<&String> = tail.iter().rev().take(10).rev().collect();
+    if tail.is_empty() {
+        format!(
+            "Health check gagal dalam {} detik; proses dihentikan. Proses tidak mengeluarkan output stderr",
+            timeout_secs
+        )
+    } else {
+        let lines: Vec<&str> = tail.iter().map(|s| s.as_str()).collect();
+        format!(
+            "Health check gagal dalam {} detik; proses dihentikan. Stderr terakhir:\n{}",
+            timeout_secs,
+            lines.join("\n")
+        )
+    }
+}
+
 fn spawn_log_reader<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
     reader: R,
-    pool: sqlx::SqlitePool,
+    state: AppState,
     server_id: String,
     severity: &'static str,
+    is_stderr: bool,
 ) {
     tokio::spawn(async move {
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             if !line.trim().is_empty() {
-                app_log(&pool, "server", severity, &line, Some(&server_id)).await;
+                if is_stderr {
+                    push_stderr_line(&state, &server_id, &line).await;
+                }
+                app_log(&state.pool, "server", severity, &line, Some(&server_id)).await;
             }
         }
     });
@@ -173,19 +227,32 @@ async fn launch_child(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(false);
-    if let Some(cwd) = &launch.cwd {
-        cmd.current_dir(cwd);
-    }
+    // Environment spawn terpusat (LD_LIBRARY_PATH/HOME/TMPDIR + cwd
+    // valid); env khusus engine diterapkan sesudahnya dan menang.
+    let home = launch
+        .envs
+        .iter()
+        .find(|(k, _)| k == "HOME")
+        .map(|(_, v)| PathBuf::from(v))
+        .unwrap_or_else(|| state.config.data_dir.clone());
+    crate::util::prepare_spawn(
+        &mut cmd,
+        state.native_lib_dir.as_deref(),
+        &home,
+        launch.cwd.as_deref(),
+    );
     for (k, v) in &launch.envs {
         cmd.env(k, v);
     }
+    // Buffer stderr dimulai bersih untuk proses baru ini.
+    state.process_stderr.lock().await.remove(&server.id);
     let mut child = cmd.spawn().map_err(|e| format!("Gagal menjalankan proses server: {}", e))?;
     let pid = child.id().map(|p| p as i64);
     if let Some(out) = child.stdout.take() {
-        spawn_log_reader(out, state.pool.clone(), server.id.clone(), "info");
+        spawn_log_reader(out, state.clone(), server.id.clone(), "info", false);
     }
     if let Some(err) = child.stderr.take() {
-        spawn_log_reader(err, state.pool.clone(), server.id.clone(), "error");
+        spawn_log_reader(err, state.clone(), server.id.clone(), "error", true);
     }
     let child_arc = Arc::new(Mutex::new(Some(child)));
     state
@@ -308,9 +375,11 @@ fn spawn_child_watcher(
                             restarted = true;
                             break;
                         }
+                        let tail = stderr_tail(&state, &server.id, 10).await;
                         let msg = format!(
-                            "Restart otomatis percobaan {} gagal: health check tidak lolos dalam 5 detik",
-                            attempts_used
+                            "Restart otomatis percobaan {} gagal: {}",
+                            attempts_used,
+                            compose_health_error(5, &tail)
                         );
                         app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
                         kill_child_arc(&new_arc).await;
@@ -323,11 +392,16 @@ fn spawn_child_watcher(
                 }
             }
             if !restarted {
-                let msg = format!(
+                let tail = stderr_tail(&state, &server.id, 10).await;
+                let mut msg = format!(
                     "Proses server berhenti tak terduga (exit code {}) dan restart otomatis gagal setelah {} percobaan",
                     exit_code.map(|c| c.to_string()).unwrap_or_else(|| "tidak diketahui".to_string()),
                     php::MAX_RESTART_ATTEMPTS
                 );
+                if !tail.is_empty() {
+                    msg.push_str(". Stderr terakhir:\n");
+                    msg.push_str(&tail.join("\n"));
+                }
                 set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
                 app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
                 release_port(&state.pool, &server.id).await;
@@ -481,7 +555,7 @@ fn engine_health_timeout(engine: &str) -> Duration {
     }
 }
 
-fn find_engine_binary(state: &AppState, engine: &str) -> Option<PathBuf> {
+pub(crate) fn find_engine_binary(state: &AppState, engine: &str) -> Option<PathBuf> {
     let dir = state.native_lib_dir.as_deref();
     match engine {
         "php" => php::find_php_binary(dir),
@@ -544,15 +618,15 @@ pub async fn validate_webserver_config(
         .map_err(|e| format!("Gagal menulis konfigurasi: {}", e))?;
     let home = crate::webservers::server_home(&state.config.data_dir, &server.id, engine);
     let args = crate::webservers::validate_args(engine, &config_path, &home);
-    let out = tokio::time::timeout(
-        Duration::from_secs(10),
-        tokio::process::Command::new(&binary)
-            .args(&args)
-            .current_dir(&home)
-            .env("HOME", &home)
-            .env("TMPDIR", home.join("tmp"))
-            .output(),
-    )
+    let mut validate_cmd = tokio::process::Command::new(&binary);
+    validate_cmd.args(&args);
+    crate::util::prepare_spawn(
+        &mut validate_cmd,
+        state.native_lib_dir.as_deref(),
+        &home,
+        Some(&home),
+    );
+    let out = tokio::time::timeout(Duration::from_secs(10), validate_cmd.output())
     .await
     .map_err(|_| "Validasi konfigurasi timeout".to_string())?
     .map_err(|e| format!("Gagal menjalankan validasi: {}", e))?;
@@ -887,6 +961,10 @@ fn spawn_node_watcher(
                     log_offset = content.len() as u64;
                     for line in String::from_utf8_lossy(new).lines() {
                         if !line.trim().is_empty() {
+                            // Log Node menggabungkan stdout+stderr; simpan
+                            // juga ke buffer ekor agar kegagalan health
+                            // check Node memuat output nyatanya.
+                            push_stderr_line(&state, &server.id, line).await;
                             app_log(&state.pool, "server", "info", line, Some(&server.id)).await;
                         }
                     }
@@ -968,7 +1046,10 @@ async fn finish_start(state: &AppState, server: &ServerRow, pid: Option<i64>, in
         .await;
         Ok(())
     } else {
-        let msg = format!("Health check gagal dalam {} detik; proses dihentikan", timeout.as_secs());
+        // Ambil ekor stderr sebelum proses dihentikan agar error_message
+        // memuat penyebab nyata dari proses, bukan pesan generik.
+        let tail = stderr_tail(state, &server.id, 10).await;
+        let msg = compose_health_error(timeout.as_secs(), &tail);
         stop_process_internal(state, &server.id).await;
         set_status(&state.pool, &server.id, "error", None, None, Some(&msg), in_process).await;
         app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
@@ -1035,6 +1116,33 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         assert!(!health_check(port).await);
+    }
+
+    #[test]
+    fn health_error_includes_last_ten_stderr_lines() {
+        let tail: Vec<String> = (1..=15).map(|i| format!("baris-{}", i)).collect();
+        let msg = compose_health_error(5, &tail);
+        assert!(msg.contains("Health check gagal dalam 5 detik"));
+        assert!(msg.contains("Stderr terakhir:"));
+        assert!(!msg.contains("baris-5\n"), "hanya 10 baris terakhir: {}", msg);
+        assert!(msg.contains("baris-6"));
+        assert!(msg.contains("baris-15"));
+    }
+
+    #[test]
+    fn health_error_without_stderr_says_so() {
+        let msg = compose_health_error(10, &[]);
+        assert!(msg.contains("tidak mengeluarkan output stderr"));
+    }
+
+    #[test]
+    fn stderr_buffer_caps_at_capacity() {
+        let mut buf = std::collections::VecDeque::new();
+        for i in 0..(STDERR_BUFFER_CAP + 5) {
+            push_capped_line(&mut buf, format!("baris-{}", i));
+        }
+        assert_eq!(buf.len(), STDERR_BUFFER_CAP);
+        assert_eq!(buf.front().map(|s| s.as_str()), Some("baris-5"));
     }
 
     #[test]

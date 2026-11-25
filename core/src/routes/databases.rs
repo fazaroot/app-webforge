@@ -116,7 +116,7 @@ pub async fn create_database(State(state): State<AppState>, Json(b): Json<Create
                 .map_err(db_err)?;
         }
         "postgresql" | "mariadb" => {
-            let runtimes = crate::runtime::detect_runtimes().await;
+            let runtimes = crate::runtime::runtimes_cached(&state, false).await;
             let available = runtimes.iter().any(|r| r.id == kind && r.available);
             if !available {
                 return Err(ApiError::new(
@@ -338,7 +338,7 @@ fn extract_zip(zip_path: &FsPath, dest: &FsPath) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_share(state: &AppState, kind: &str, home: &FsPath) -> Result<PathBuf, String> {
+pub(crate) fn ensure_share(state: &AppState, kind: &str, home: &FsPath) -> Result<PathBuf, String> {
     // Layout zip berbeda: postgres-share.zip berakar share/postgresql/...
     // (diekstrak ke home), mariadb-share.zip berakar isi share itu sendiri
     // (diekstrak ke share dir).
@@ -380,6 +380,14 @@ async fn run_command(
 ) -> Result<(bool, String), String> {
     let mut cmd = tokio::process::Command::new(program);
     cmd.args(args);
+    let home = crate::state::data_dir()
+        .unwrap_or_else(|| std::env::temp_dir().join("webforge-probe"));
+    crate::util::prepare_spawn(
+        &mut cmd,
+        crate::state::native_lib_dir().as_deref(),
+        &home,
+        Some(&home),
+    );
     if stdin_data.is_some() {
         cmd.stdin(std::process::Stdio::piped());
     }
@@ -415,6 +423,12 @@ async fn spawn_service(
 ) -> Result<(), String> {
     let mut cmd = tokio::process::Command::new(&program);
     cmd.args(&args);
+    crate::util::prepare_spawn(
+        &mut cmd,
+        state.native_lib_dir.as_deref(),
+        &state.config.data_dir,
+        Some(&state.config.data_dir),
+    );
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
     let mut child = cmd

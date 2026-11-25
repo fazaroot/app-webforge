@@ -40,3 +40,9 @@ export interface PythonProjectInfo { venv_exists: boolean; venv_path: string | n
 export interface NodeProjectInfo { package_json_exists: boolean; scripts: Record<string, string>; entry: string | null; node_modules_exists: boolean; npm_available: boolean }
 export interface ActionOutput { ok: boolean; output: string }
 export interface PowerStatus { ignoringBatteryOptimizations: boolean; keepCpuAwake: boolean }
+export interface RuntimeTestResult { id: string; ok: boolean; version: string | null; stdout: string; stderr: string; exit_code: number | null; duration_ms: number; error: string | null }
+export interface SelfTestEngineResult { engine: string; ok: boolean; duration_ms: number; detail: string; error: string | null }
+export interface SelfTestResponse { results: SelfTestEngineResult[] }
+export type CoreStartupState = 'starting' | 'ready' | 'error';
+export interface CoreStatus { startupState: string | null; assetState: string | null; loadError: string | null }
+export interface StartupLogEntry { ts: string; message: string }

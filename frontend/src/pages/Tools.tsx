@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { formatDateTime } from '../lib/format';
-import { Card, EmptyBox, ErrorBox, LoadingBox, StatusPill } from '../components/ui';
-import { RuntimeBadge } from '../components/RuntimeBadge';
+import { Card, EmptyBox, ErrorBox, LoadingBox, SkeletonRows, StatusPill } from '../components/ui';
+import { RuntimePanel } from '../components/RuntimePanel';
+import { SelfTestPanel, StartupLogPanel } from '../components/DiagnosticsPanel';
 import { ProjectPicker } from '../components/ProjectPicker';
 import { useAppStore } from '../store';
 
@@ -14,7 +15,7 @@ export function Tools() {
     enabled: projectId !== null,
   });
   const diag = useQuery({ queryKey: ['diagnostics'], queryFn: api.diagnostics });
-  const runtimes = useQuery({ queryKey: ['runtimes'], queryFn: api.runtimes });
+  const runtimes = useQuery({ queryKey: ['runtimes'], queryFn: () => api.runtimes() });
 
   return (
     <div className="space-y-4">
@@ -56,9 +57,13 @@ export function Tools() {
         )}
       </Card>
 
+      <SelfTestPanel />
+
+      <StartupLogPanel />
+
       <Card title="Runtime terdaftar">
-        {runtimes.isLoading ? <LoadingBox /> : runtimes.isError ? <ErrorBox message="Gagal memuat runtime." /> : (
-          <div className="space-y-2">{(runtimes.data ?? []).map((r) => <RuntimeBadge key={r.id} runtime={r} />)}</div>
+        {runtimes.isLoading ? <SkeletonRows rows={3} /> : runtimes.isError ? <ErrorBox message="Gagal memuat runtime." /> : (
+          <RuntimePanel runtimes={runtimes.data ?? []} />
         )}
       </Card>
     </div>

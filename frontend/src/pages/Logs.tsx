@@ -4,6 +4,7 @@ import { Download } from 'lucide-react';
 import { api } from '../lib/api';
 import { formatDateTime } from '../lib/format';
 import { Card, EmptyBox, ErrorBox, LoadingBox, btnGhost, inputCls } from '../components/ui';
+import { StartupLogPanel } from '../components/DiagnosticsPanel';
 
 export function Logs() {
   const [severity, setSeverity] = useState('');
@@ -63,6 +64,8 @@ export function Logs() {
           </div>
         )}
       </Card>
+
+      <StartupLogPanel />
     </div>
   );
 }

@@ -6,7 +6,7 @@ import { formatDateTime, formatUptime } from '../lib/format';
 import { isPhpProject } from '../lib/php';
 import type { CreateServerBody, Project, RuntimeInfo, ServerEngine, ServerInstance, ValidateConfigResult } from '../lib/types';
 import { Card, EmptyBox, ErrorBox, SkeletonRows, StatusPill, btnGhost, btnPrimary, inputCls } from '../components/ui';
-import { RuntimeBadge } from '../components/RuntimeBadge';
+import { RuntimePanel } from '../components/RuntimePanel';
 import { PhpManager } from '../components/PhpManager';
 
 export const ENGINE_LABELS: Record<ServerEngine, string> = {
@@ -304,7 +304,7 @@ export function Servers() {
 
   const servers = useQuery({ queryKey: ['servers'], queryFn: api.servers, refetchInterval: 3000 });
   const projects = useQuery({ queryKey: ['projects'], queryFn: api.projects });
-  const runtimes = useQuery({ queryKey: ['runtimes'], queryFn: api.runtimes });
+  const runtimes = useQuery({ queryKey: ['runtimes'], queryFn: () => api.runtimes() });
   const logs = useQuery({
     queryKey: ['server-logs', logsFor],
     queryFn: () => api.serverLogs(logsFor as string),
@@ -517,26 +517,19 @@ export function Servers() {
 
       <Card title="Runtime">
         {runtimes.isLoading ? <SkeletonRows rows={3} /> : runtimes.isError ? <ErrorBox message="Gagal memuat runtime." /> : (
-          <div className="space-y-2">
-            {runtimeList.map((r) => {
+          <RuntimePanel
+            runtimes={runtimeList}
+            renderAction={(r) => {
               const engineId = r.id as ServerEngine;
-              const canUse = r.available && engineOptions.includes(engineId);
-              return (
-                <div key={r.id} className="space-y-1">
-                  <RuntimeBadge runtime={r} />
-                  {canUse && (
-                    <div className="flex justify-end">
-                      <button type="button" className={btnGhost} onClick={() => setEngine(engineId)}>
-                        Pakai engine ini
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+              return r.available && engineOptions.includes(engineId) ? (
+                <button type="button" className={btnGhost} onClick={() => setEngine(engineId)}>
+                  Pakai engine ini
+                </button>
+              ) : null;
+            }}
+          />
         )}
-        <p className="text-xs text-slate-600 dark:text-slate-400 mt-2">Runtime yang belum tersedia tidak dapat dijalankan dan tidak ditampilkan tombol start. Tombol "Pakai engine ini" hanya muncul untuk runtime tersedia yang relevan dengan proyek terpilih.</p>
+        <p className="text-xs text-slate-600 dark:text-slate-400 mt-2">Runtime yang belum tersedia tidak dapat dijalankan dan tidak ditampilkan tombol start. Tombol "Pakai engine ini" hanya muncul untuk runtime tersedia yang relevan dengan proyek terpilih. "Tes Runtime" menjalankan probe segar dan menampilkan keluaran aslinya.</p>
       </Card>
 
       <PhpManager />

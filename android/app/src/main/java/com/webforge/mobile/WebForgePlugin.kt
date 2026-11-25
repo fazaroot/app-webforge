@@ -9,12 +9,14 @@ import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.result.ActivityResult
 import androidx.documentfile.provider.DocumentFile
+import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.ActivityCallback
 import com.getcapacitor.annotation.CapacitorPlugin
+import org.json.JSONObject
 import java.io.File
 
 /**
@@ -22,8 +24,19 @@ import java.io.File
  * (frontend/src/lib/api.ts):
  *   getApiBase(): Promise<{ value: string }>
  *   getToken():   Promise<{ value: string }>
- *   getStatus():  Promise<Record<string, unknown>>
- *   startCore():  Promise<Record<string, unknown>>
+ *   getStatus():  Promise<{
+ *     running: boolean,            // TCP 127.0.0.1:8765 benar-benar menerima koneksi
+ *     started: boolean,            // nativeStart pernah mengembalikan 0
+ *     libraryLoaded: boolean,
+ *     port: number,
+ *     apiBase: string,
+ *     loadError: string | null,    // selalu ada; null bila tidak ada error library/native
+ *     startupState: "starting" | "ready" | "error",
+ *     assetState: Record<string, string> // assetId -> "pending"|"extracting"|"done"|"error: <pesan>"
+ *   }>
+ *   getStartupLog(): Promise<{ entries: Array<{ ts: number, message: string }> }>
+ *                    // ts = epoch millis; urut lama -> baru; maks 200 entri terakhir
+ *   startCore():  Promise<{ started: boolean, apiBase: string, port: number, startupState: string }>
  *   stopCore():   Promise<Record<string, unknown>>
  * Ditambah pickDirectory (SAF) dan openBatterySettings sesuai API_CONTRACT.md,
  * serta metode daya anti-stuck v0.2.0:
@@ -50,15 +63,42 @@ class WebForgePlugin : Plugin() {
         // Cek TCP nyata di thread latar; flag started saja tidak cukup.
         Thread {
             val reachable = CoreBridge.isReachable()
+            val assetState = JSObject()
+            for ((assetId, state) in CoreBridge.assetState()) {
+                assetState.put(assetId, state)
+            }
             val result = JSObject()
                 .put("running", reachable)
                 .put("started", CoreBridge.started)
                 .put("libraryLoaded", CoreBridge.libraryLoaded)
                 .put("port", CoreBridge.PORT)
                 .put("apiBase", CoreBridge.API_BASE)
-            CoreBridge.loadError?.let { result.put("loadError", it) }
+                .put("startupState", CoreBridge.startupState)
+                .put("assetState", assetState)
+            // loadError selalu disertakan: string pesan error, atau null
+            // bila tidak ada error library/native.
+            result.put("loadError", CoreBridge.loadError ?: JSONObject.NULL)
             call.resolve(result)
         }.start()
+    }
+
+    /**
+     * Ring buffer log startup CoreBridge (library dimuat/gagal,
+     * nativeStart rc, ekstraksi aset, kejadian watchdog). Hasil:
+     * { entries: [{ ts: <epoch millis>, message: string }] },
+     * urut lama -> baru.
+     */
+    @PluginMethod
+    fun getStartupLog(call: PluginCall) {
+        val entries = JSArray()
+        for (entry in CoreBridge.startupLogEntries()) {
+            entries.put(
+                JSObject()
+                    .put("ts", entry.ts)
+                    .put("message", entry.message)
+            )
+        }
+        call.resolve(JSObject().put("entries", entries))
     }
 
     @PluginMethod
@@ -69,6 +109,7 @@ class WebForgePlugin : Plugin() {
                 .put("started", true)
                 .put("apiBase", CoreBridge.API_BASE)
                 .put("port", CoreBridge.PORT)
+                .put("startupState", CoreBridge.startupState)
         )
     }
 

@@ -85,12 +85,15 @@ pub async fn php_cli(
 
     let project_path: String = project.get("path");
     let mut cmd = tokio::process::Command::new(&binary);
-    cmd.args(&body.args)
-        .current_dir(&project_path)
-        .env("HOME", &state.config.data_dir)
-        .env("TMPDIR", php::php_tmp_dir(&state.config.data_dir))
-        .env("PHPRC", &state.config.data_dir)
-        .kill_on_drop(true);
+    cmd.args(&body.args).kill_on_drop(true);
+    crate::util::prepare_spawn(
+        &mut cmd,
+        state.native_lib_dir.as_deref(),
+        &state.config.data_dir,
+        Some(std::path::Path::new(&project_path)),
+    );
+    cmd.env("TMPDIR", php::php_tmp_dir(&state.config.data_dir))
+        .env("PHPRC", &state.config.data_dir);
     match tokio::time::timeout(PHP_CLI_TIMEOUT, cmd.output()).await {
         Ok(Ok(out)) => Ok(Json(json!({
             "exit_code": out.status.code(),

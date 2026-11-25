@@ -61,6 +61,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/system/info", get(system::system_info))
         .route("/api/system/diagnostics", get(system::diagnostics))
         .route("/api/runtimes", get(system::runtimes))
+        .route("/api/runtimes/:id/test", post(system::runtime_test))
+        .route("/api/diagnostics/self-test", post(system::self_test))
         .route("/api/runtimes/php/info", get(php::php_info))
         .route("/api/php/settings", get(php::get_php_settings).put(php::put_php_settings))
         .route("/api/projects/:id/php-cli", post(php::php_cli))
