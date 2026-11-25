@@ -300,6 +300,7 @@ jobs:
             --without-pear \
             --enable-bcmath \
             --enable-ctype \
+            --with-libxml \
             --enable-dom \
             --enable-fileinfo \
             --enable-filter \
