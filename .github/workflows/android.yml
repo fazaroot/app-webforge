@@ -418,7 +418,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Install cargo-ndk
-        run: cargo install cargo-ndk --locked
+        run: command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
 
       - name: Locate Android NDK
         run: |
