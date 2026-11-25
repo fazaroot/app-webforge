@@ -314,14 +314,18 @@ fi
 log "kemas mariadb-share.zip"
 rm -rf "$WORK_DIR/stage-share"
 mkdir -p "$STAGE_SHARE/charsets" "$STAGE_SHARE/english"
-cp "$MARIADB_SRC"/strings/charsets/*.xml "$STAGE_SHARE/charsets/" 2>/dev/null || true
+cp "$MARIADB_SRC"/sql/share/charsets/*.xml "$STAGE_SHARE/charsets/"
 [ -f "$STAGE_SHARE/charsets/Index.xml" ] || fail "charsets/Index.xml tidak ditemukan di source MariaDB"
 ERRMSG_SYS=$(find "$TARGET_BUILD" -path "*english/errmsg.sys" | head -1)
 [ -n "$ERRMSG_SYS" ] || fail "english/errmsg.sys tidak dihasilkan build (comp_err host gagal?)"
 cp "$ERRMSG_SYS" "$STAGE_SHARE/english/errmsg.sys"
 for sql in mysql_system_tables.sql mysql_system_tables_data.sql mysql_performance_tables.sql mysql_sys_schema.sql fill_help_tables.sql; do
-  [ -f "$MARIADB_SRC/sql/share/$sql" ] || fail "SQL sistem tidak ditemukan: sql/share/$sql"
-  cp "$MARIADB_SRC/sql/share/$sql" "$STAGE_SHARE/$sql"
+  sql_src=$(find "$TARGET_BUILD" -name "$sql" | head -1)
+  if [ -z "$sql_src" ] && [ -f "$MARIADB_SRC/scripts/$sql" ]; then
+    sql_src="$MARIADB_SRC/scripts/$sql"
+  fi
+  [ -n "$sql_src" ] || fail "SQL sistem tidak ditemukan: $sql"
+  cp "$sql_src" "$STAGE_SHARE/$sql"
 done
 rm -f "$OUT_DIR/mariadb-share.zip"
 (cd "$STAGE_SHARE" && zip -qr "$OUT_DIR/mariadb-share.zip" .)
