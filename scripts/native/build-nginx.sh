@@ -235,6 +235,10 @@ sed -i 's|#include <crypt.h>|/* crypt.h tidak tersedia di Bionic API 26 */|' src
   --test-build-epoll
 
 
+# glob()/globfree() Bionic baru dideklarasikan API 28; matikan deteksi glob
+# agar Nginx memakai implementasi fallback opendir-nya.
+sed -i '/#define NGX_HAVE_GLOB/d' objs/ngx_auto_config.h
+
 if ! grep -q "NGX_HAVE_EPOLL" objs/ngx_auto_config.h; then
   echo "::warning::NGX_HAVE_EPOLL tidak terdeteksi; Nginx akan memakai poll/select. Periksa log configure."
 fi

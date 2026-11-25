@@ -161,7 +161,7 @@ rm -rf "$SRC/pcre2-${PCRE2_VERSION}"
 tar -xzf "$DL/pcre2.tar.gz" -C "$SRC"
 (
   cd "$SRC/pcre2-${PCRE2_VERSION}"
-  ./configure \
+  CC_FOR_BUILD=cc ./configure \
     --host=aarch64-linux-android \
     --build=x86_64-linux-gnu \
     --prefix="$PREFIX" \
@@ -170,7 +170,7 @@ tar -xzf "$DL/pcre2.tar.gz" -C "$SRC"
     --disable-jit \
     --enable-unicode \
     CC="$CC" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP"
-  make -j"$JOBS"
+  make -j"$JOBS" CC_FOR_BUILD=cc
   make install
 )
 
@@ -184,7 +184,7 @@ tar -xzf "$DL/openssl.tar.gz" -C "$SRC"
   ./Configure android-arm64 "-D__ANDROID_API__=${ANDROID_API}" \
     no-shared no-tests no-docs \
     --prefix="$PREFIX" --openssldir="$PREFIX/ssl"
-  make -j"$JOBS" build_sw
+  make -j"$JOBS" CC_FOR_BUILD=cc build_sw
   make install_sw
 )
 
@@ -195,7 +195,7 @@ rm -rf "$SRC/apr-${APR_VERSION}"
 tar -xzf "$DL/apr.tar.gz" -C "$SRC"
 (
   cd "$SRC/apr-${APR_VERSION}"
-  ./configure \
+  CC_FOR_BUILD=cc ./configure \
     --host=aarch64-linux-android \
     --build=x86_64-linux-gnu \
     --prefix="$PREFIX" \
@@ -209,7 +209,7 @@ tar -xzf "$DL/apr.tar.gz" -C "$SRC"
     apr_cv_epoll=yes \
     ac_cv_func_poll=yes \
     ac_cv_func_mmap_fixed_mapped=yes
-  make -j"$JOBS"
+  make -j"$JOBS" CC_FOR_BUILD=cc
   make install
 )
 
@@ -220,7 +220,7 @@ rm -rf "$SRC/apr-util-${APR_UTIL_VERSION}"
 tar -xzf "$DL/apr-util.tar.gz" -C "$SRC"
 (
   cd "$SRC/apr-util-${APR_UTIL_VERSION}"
-  ./configure \
+  CC_FOR_BUILD=cc ./configure \
     --host=aarch64-linux-android \
     --build=x86_64-linux-gnu \
     --prefix="$PREFIX" \
@@ -232,7 +232,7 @@ tar -xzf "$DL/apr-util.tar.gz" -C "$SRC"
     --without-ldap \
     CC="$CC" CXX="$CXX" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP" \
     "${CROSS_CACHE_VARS[@]}"
-  make -j"$JOBS"
+  make -j"$JOBS" CC_FOR_BUILD=cc
   make install
 )
 
@@ -260,7 +260,7 @@ tar -xzf "$DL/httpd.tar.gz" -C "$SRC"
     CC="$CC" CXX="$CXX" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP" \
     "${CROSS_CACHE_VARS[@]}" \
     ac_cv_func_poll=yes
-  make -j"$JOBS"
+  make -j"$JOBS" CC_FOR_BUILD=cc
 )
 
 # Binary httpd bisa berupa wrapper libtool (skrip) dengan ELF asli di
