@@ -578,6 +578,7 @@ jobs:
           path: |
             node-out/libnode.so
             node-out/libwebforge_node.so
+            node-out/libc++_shared.so
             node-out/npm.zip
             node-out/node-version.txt
           if-no-files-found: error
@@ -787,7 +788,7 @@ jobs:
           JNILIBS=android/app/src/main/jniLibs/arm64-v8a
           ASSETS=android/app/src/main/assets
           mkdir -p "$JNILIBS" "$ASSETS"
-          for so in libcaddy.so libnginx.so libhttpd.so libpython.so libnode.so libwebforge_node.so libpostgres.so libinitdb.so libpgctl.so libmariadbd.so; do
+          for so in libcaddy.so libnginx.so libhttpd.so libpython.so libnode.so libwebforge_node.so libc++_shared.so libpostgres.so libinitdb.so libpgctl.so libmariadbd.so; do
             SRC=$(find runtime-artifacts -name "$so" | head -1)
             if [ -z "$SRC" ]; then
               echo "::error::$so tidak ditemukan di artifact runtime"
@@ -832,7 +833,7 @@ jobs:
             echo "::error::APK terlalu kecil ($SIZE bytes), diduga build rusak"
             exit 1
           fi
-          for entry in AndroidManifest.xml classes.dex lib/arm64-v8a/libwebforge_core.so lib/arm64-v8a/libphp.so lib/arm64-v8a/libcaddy.so lib/arm64-v8a/libnginx.so lib/arm64-v8a/libhttpd.so lib/arm64-v8a/libpython.so lib/arm64-v8a/libnode.so lib/arm64-v8a/libwebforge_node.so lib/arm64-v8a/libpostgres.so lib/arm64-v8a/libinitdb.so lib/arm64-v8a/libpgctl.so lib/arm64-v8a/libmariadbd.so assets/python-stdlib.zip assets/python-version.txt assets/node-version.txt assets/npm.zip assets/postgres-share.zip assets/mariadb-share.zip; do
+          for entry in AndroidManifest.xml classes.dex lib/arm64-v8a/libwebforge_core.so lib/arm64-v8a/libphp.so lib/arm64-v8a/libcaddy.so lib/arm64-v8a/libnginx.so lib/arm64-v8a/libhttpd.so lib/arm64-v8a/libpython.so lib/arm64-v8a/libnode.so lib/arm64-v8a/libwebforge_node.so lib/arm64-v8a/libc++_shared.so lib/arm64-v8a/libpostgres.so lib/arm64-v8a/libinitdb.so lib/arm64-v8a/libpgctl.so lib/arm64-v8a/libmariadbd.so assets/python-stdlib.zip assets/python-version.txt assets/node-version.txt assets/npm.zip assets/postgres-share.zip assets/mariadb-share.zip; do
             if ! unzip -l "$APK" | grep -q "$entry"; then
               echo "::error::APK tidak berisi $entry"
               exit 1

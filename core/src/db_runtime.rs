@@ -28,12 +28,14 @@
 //!
 //! - Binary server dikemas sebagai `lib*.so` di nativeLibraryDir (W^X:
 //!   hanya lokasi itu yang boleh dieksekusi). PostgreSQL mencari folder
-//!   `share/` relatif terhadap path executable-nya, jadi core WAJIB
-//!   menjalankan PostgreSQL lewat symlink `bin/postgres` di home instance
-//!   (argv[0] = path symlink absolut) dan mengekstrak share ke
-//!   `share/postgresql`. Build PostgreSQL WebForge mematikan
-//!   `HAVE_PROC_SELF_EXE` supaya resolusi path memakai argv[0], bukan
-//!   `/proc/self/exe` yang akan menembus symlink ke nativeLibraryDir.
+//!   `share/` dan program pendamping relatif terhadap path
+//!   executable-nya, jadi core WAJIB menjalankan PostgreSQL lewat
+//!   symlink `bin/postgres` di home instance (argv[0] = path symlink
+//!   absolut) dan mengekstrak share ke `share/postgresql`. Build
+//!   PostgreSQL WebForge mempatch `normalize_exec_path` agar path
+//!   argv[0] tidak di-`realpath` menembus symlink ke nativeLibraryDir;
+//!   tanpa patch itu initdb mencari program "postgres" di folder
+//!   `libinitdb.so` dan gagal di perangkat.
 //! - Android tidak menyediakan System V shared memory/semaphore yang bisa
 //!   diandalkan (kernel Android umumnya tanpa CONFIG_SYSVIPC) dan Bionic
 //!   tidak menyediakan `shm_open`. Karena itu config PostgreSQL memaksa
@@ -127,7 +129,8 @@ pub fn postgres_psql_path(home: &Path) -> PathBuf {
 }
 
 /// Pasangan (symlink di home, target di nativeLibraryDir) yang harus
-/// dibuat koordinator sebelum initdb/start pertama.
+/// dibuat koordinator sebelum initdb/start pertama. Gunakan
+/// [`ensure_postgres_symlinks`] untuk membuat/memperbarui symlink itu.
 pub fn postgres_symlinks(home: &Path, native_lib_dir: &Path) -> Vec<(PathBuf, PathBuf)> {
     vec![
         (
@@ -147,6 +150,60 @@ pub fn postgres_symlinks(home: &Path, native_lib_dir: &Path) -> Vec<(PathBuf, Pa
             native_lib_dir.join("libpsql.so"),
         ),
     ]
+}
+
+/// Buat atau perbarui symlink binary PostgreSQL di home instance.
+///
+/// nativeLibraryDir berubah antar instalasi/update APK, jadi symlink
+/// lama bisa menunjuk path yang sudah tidak ada. Fungsi ini mengganti
+/// symlink yang targetnya berbeda (termasuk symlink rusak) dan menolak
+/// menimpa file/direktori biasa yang kebetulan berada di path symlink.
+#[cfg(unix)]
+pub fn ensure_postgres_symlinks(home: &Path, native_lib_dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(home.join("bin")).map_err(|e| e.to_string())?;
+    for (link, target) in postgres_symlinks(home, native_lib_dir) {
+        match std::fs::symlink_metadata(&link) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                match std::fs::read_link(&link) {
+                    Ok(existing) if existing == target => continue,
+                    _ => {
+                        std::fs::remove_file(&link).map_err(|e| {
+                            format!("Gagal mengganti symlink {}: {}", link.display(), e)
+                        })?;
+                    }
+                }
+            }
+            Ok(_) => {
+                return Err(format!(
+                    "Path binary PostgreSQL sudah ada dan bukan symlink: {}",
+                    link.display()
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(format!(
+                    "Gagal memeriksa symlink {}: {}",
+                    link.display(),
+                    e
+                ));
+            }
+        }
+        std::os::unix::fs::symlink(&target, &link).map_err(|e| {
+            format!(
+                "Gagal membuat symlink {} -> {}: {}",
+                link.display(),
+                target.display(),
+                e
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// Di non-Unix tidak ada jalur symlink Android; host memakai binary PATH.
+#[cfg(not(unix))]
+pub fn ensure_postgres_symlinks(_home: &Path, _native_lib_dir: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 /// Direktori yang harus dibuat core sebelum initdb/start PostgreSQL.
@@ -401,6 +458,10 @@ pub fn mariadb_bootstrap_args(home: &Path) -> Vec<String> {
 
 /// File SQL sistem MariaDB 10.11 yang harus dialirkan ke
 /// `mariadbd --bootstrap`, dalam urutan yang dipakai mariadb-install-db.
+/// Isi file-file ini tidak memilih database sendiri untuk tabel sistem
+/// utama, jadi rakit SQL bootstrap wajib memakai
+/// [`assemble_mariadb_bootstrap_sql`] (membuat + memilih database
+/// `mysql` lebih dulu), bukan menggabungkan file mentah begitu saja.
 pub fn mariadb_bootstrap_sql_files(share_dir: &Path) -> Vec<PathBuf> {
     [
         "mysql_system_tables.sql",
@@ -414,15 +475,43 @@ pub fn mariadb_bootstrap_sql_files(share_dir: &Path) -> Vec<PathBuf> {
     .collect()
 }
 
-/// SQL penetapan password root setelah bootstrap. Hasil bootstrap
-/// meninggalkan root@localhost tanpa password; SQL ini harus dijalankan
-/// dalam sesi bootstrap yang sama (atau segera sesudahnya lewat socket)
+/// Rakit SQL bootstrap MariaDB dari isi file sistem + password root.
+///
+/// File `mysql_system_tables.sql` langsung membuat tabel tanpa
+/// kualifikasi skema dan mengasumsikan database `mysql` sudah terpilih
+/// (mariadb-install-db menyiapkan konteks itu). Tanpa awalan ini
+/// bootstrap gagal `ERROR 1046 No database selected`. Awalan membuat
+/// database `mysql` bila belum ada lalu memilihnya; `USE mysql`
+/// diulang sebelum penetapan password karena skrip performance/sys di
+/// tengah dapat mengubah konteks database sesi.
+pub fn assemble_mariadb_bootstrap_sql(file_contents: &[String], password: &str) -> String {
+    let mut sql = String::from("CREATE DATABASE IF NOT EXISTS mysql;\nUSE mysql;\n");
+    for content in file_contents {
+        sql.push_str(content);
+        if !content.ends_with('\n') {
+            sql.push('\n');
+        }
+    }
+    sql.push_str("USE mysql;\n");
+    sql.push_str(&mariadb_set_root_password_sql(password));
+    sql
+}
+
+/// SQL penetapan password root setelah bootstrap. Data sistem membuat
+/// akun root tanpa password untuk localhost, hostname, 127.0.0.1, dan
+/// ::1. Core menghubungi MariaDB lewat TCP 127.0.0.1, jadi password
+/// wajib dipasang pada root@127.0.0.1 juga (bukan hanya localhost
+/// socket), dan akun root host lain dihapus agar tidak tertinggal
+/// tanpa password. SQL ini dijalankan dalam sesi bootstrap yang sama
 /// sebelum server melayani koneksi TCP.
 pub fn mariadb_set_root_password_sql(password: &str) -> String {
     let escaped = password.replace('\\', "\\\\").replace('\'', "\\'");
     format!(
-        "ALTER USER 'root'@'localhost' IDENTIFIED BY '{}';\nFLUSH PRIVILEGES;\n",
-        escaped
+        "DELETE FROM mysql.global_priv WHERE User='root' AND Host NOT IN ('localhost','127.0.0.1');\n\
+         ALTER USER 'root'@'localhost' IDENTIFIED BY '{escaped}';\n\
+         ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '{escaped}';\n\
+         FLUSH PRIVILEGES;\n",
+        escaped = escaped
     )
 }
 
@@ -617,6 +706,41 @@ mod tests {
         assert!(links.iter().any(|(_, t)| t.ends_with("libpgctl.so")));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn postgres_symlinks_are_replaced_when_native_dir_changes() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "wf-pg-symlink-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let home = root.join("home");
+        let old_native = root.join("old-lib");
+        let new_native = root.join("new-lib");
+        std::fs::create_dir_all(&old_native).unwrap();
+        std::fs::create_dir_all(&new_native).unwrap();
+        for dir in [&old_native, &new_native] {
+            for name in ["libpostgres.so", "libinitdb.so", "libpgctl.so", "libpsql.so"] {
+                std::fs::write(dir.join(name), b"elf").unwrap();
+            }
+        }
+        ensure_postgres_symlinks(&home, &old_native).unwrap();
+        assert_eq!(
+            std::fs::read_link(postgres_initdb_path(&home)).unwrap(),
+            old_native.join("libinitdb.so")
+        );
+        ensure_postgres_symlinks(&home, &new_native).unwrap();
+        assert_eq!(
+            std::fs::read_link(postgres_initdb_path(&home)).unwrap(),
+            new_native.join("libinitdb.so")
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn mariadb_cnf_has_port_bind_socket_and_innodb() {
         let home = home_my();
@@ -665,8 +789,27 @@ mod tests {
     #[test]
     fn mariadb_root_password_sql_escapes_quotes() {
         let sql = mariadb_set_root_password_sql("a'b\\c");
-        assert!(sql.contains("IDENTIFIED BY 'a\\'b\\\\c'"));
+        assert!(sql.contains("ALTER USER 'root'@'localhost' IDENTIFIED BY 'a\\'b\\\\c'"));
+        assert!(sql.contains("ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY 'a\\'b\\\\c'"));
+        assert!(sql.contains("DELETE FROM mysql.global_priv WHERE User='root'"));
         assert!(sql.contains("FLUSH PRIVILEGES"));
+    }
+
+    #[test]
+    fn mariadb_bootstrap_sql_selects_mysql_before_system_tables() {
+        let contents = vec![
+            "CREATE TABLE db (Host char(255));\n".to_string(),
+            "INSERT INTO global_priv VALUES ('localhost','root','{}');\n".to_string(),
+        ];
+        let sql = assemble_mariadb_bootstrap_sql(&contents, "secret");
+        let create_pos = sql.find("CREATE DATABASE IF NOT EXISTS mysql;").unwrap();
+        let use_pos = sql.find("USE mysql;").unwrap();
+        let table_pos = sql.find("CREATE TABLE db").unwrap();
+        assert!(create_pos < use_pos && use_pos < table_pos, "sql: {}", sql);
+        let alter_pos = sql.find("ALTER USER 'root'@'127.0.0.1'").unwrap();
+        let insert_pos = sql.find("INSERT INTO global_priv").unwrap();
+        assert!(insert_pos < alter_pos, "sql: {}", sql);
+        assert!(sql[insert_pos..alter_pos].contains("USE mysql;"), "sql: {}", sql);
     }
 
     #[test]

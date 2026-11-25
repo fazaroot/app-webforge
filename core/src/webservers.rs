@@ -523,8 +523,6 @@ pub fn validate_args(engine: &str, config_path: &Path, home: &Path) -> Vec<Strin
             path_str(config_path),
             "-p".to_string(),
             path_str(home),
-            "-g".to_string(),
-            "daemon off;".to_string(),
         ],
         "apache" | "httpd" => vec![
             "-t".to_string(),
@@ -554,8 +552,6 @@ pub fn launch_args(engine: &str, config_path: &Path, home: &Path) -> Vec<String>
             path_str(config_path),
             "-p".to_string(),
             path_str(home),
-            "-g".to_string(),
-            "daemon off;".to_string(),
         ],
         "apache" | "httpd" => vec![
             "-f".to_string(),
@@ -667,6 +663,29 @@ mod tests {
     }
 
     #[test]
+    fn nginx_config_has_single_daemon_and_prefix_paths() {
+        let text = generate_nginx_config(&sample_input(None));
+        assert_eq!(text.matches("daemon off;").count(), 1, "nginx: {}", text);
+        assert_eq!(text.matches("master_process off;").count(), 1, "nginx: {}", text);
+        for expected in [
+            "pid /data/webforge/servers/srv-1/nginx/nginx.pid;",
+            "error_log /data/webforge/servers/srv-1/nginx/logs/error.log;",
+            "client_body_temp_path /data/webforge/servers/srv-1/nginx/tmp/client_body;",
+            "proxy_temp_path /data/webforge/servers/srv-1/nginx/tmp/proxy;",
+            "fastcgi_temp_path /data/webforge/servers/srv-1/nginx/tmp/fastcgi;",
+            "uwsgi_temp_path /data/webforge/servers/srv-1/nginx/tmp/uwsgi;",
+            "scgi_temp_path /data/webforge/servers/srv-1/nginx/tmp/scgi;",
+        ] {
+            assert!(text.contains(expected), "nginx: {}", text);
+        }
+        assert!(!text.contains("/webforge/error.log"), "nginx: {}", text);
+        let cfg = Path::new("/data/webforge/servers/srv-1/nginx/nginx.conf");
+        let home = Path::new("/data/webforge/servers/srv-1/nginx");
+        assert!(!validate_args("nginx", cfg, home).iter().any(|a| a.contains("daemon")));
+        assert!(!launch_args("nginx", cfg, home).iter().any(|a| a.contains("daemon")));
+    }
+
+    #[test]
     fn nginx_proxy_has_proxy_pass_and_headers() {
         let text = generate_nginx_config(&sample_input(Some(9000)));
         assert!(text.contains("listen 127.0.0.1:8080;"), "nginx: {}", text);
@@ -752,8 +771,6 @@ mod tests {
                 "/data/webforge/servers/srv-1/nginx/nginx.conf".to_string(),
                 "-p".to_string(),
                 "/data/webforge/servers/srv-1/nginx".to_string(),
-                "-g".to_string(),
-                "daemon off;".to_string(),
             ]
         );
         assert_eq!(
@@ -763,8 +780,6 @@ mod tests {
                 "/data/webforge/servers/srv-1/nginx/nginx.conf".to_string(),
                 "-p".to_string(),
                 "/data/webforge/servers/srv-1/nginx".to_string(),
-                "-g".to_string(),
-                "daemon off;".to_string(),
             ]
         );
 

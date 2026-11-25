@@ -66,12 +66,24 @@ echo "-- go build ./cmd/caddy --"
 # section runtime Go.
 (
   cd "$CADDY_SRC"
-  go build -trimpath -ldflags "-s -w" -o "$TMPBIN" ./cmd/caddy
+  # CustomVersion + -buildvcs=false: tanpa keduanya `caddy version`
+  # menampilkan hash commit VCS hasil clone, bukan versi rilis.
+  go build -buildvcs=false -trimpath \
+    -ldflags "-s -w -X github.com/caddyserver/caddy/v2.CustomVersion=v${CADDY_VERSION}" \
+    -o "$TMPBIN" ./cmd/caddy
 )
 
 OUT="$OUTPUT_DIR/libcaddy.so"
 cp "$TMPBIN" "$OUT"
 chmod +x "$OUT"
+
+echo "-- Verifikasi versi Caddy tertanam --"
+go version -m "$OUT" || true
+if ! grep -a -q "v${CADDY_VERSION}" "$OUT"; then
+  echo "::error::Versi v${CADDY_VERSION} tidak ditemukan pada binary Caddy; CustomVersion gagal tertanam." >&2
+  exit 1
+fi
+echo "OK: CustomVersion v${CADDY_VERSION} tertanam"
 
 echo "-- Verifikasi ELF --"
 if command -v file >/dev/null 2>&1; then

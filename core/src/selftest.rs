@@ -603,12 +603,7 @@ async fn run_postgres_selftest(state: &AppState, paths: &EnginePaths) -> Result<
         Some((d.to_path_buf(), pg))
     });
     let (initdb, postgres, pg_ctl, share) = if let Some((native_dir, _)) = bundled {
-        for (link, target) in db_runtime::postgres_symlinks(&home, &native_dir) {
-            if !link.exists() {
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(&target, &link).map_err(|e| e.to_string())?;
-            }
-        }
+        db_runtime::ensure_postgres_symlinks(&home, &native_dir)?;
         let share = crate::routes::databases::ensure_share(state, "postgresql", &home)?;
         (
             db_runtime::postgres_initdb_path(&home),
@@ -761,14 +756,13 @@ async fn run_mariadb_selftest(state: &AppState, paths: &EnginePaths) -> Result<S
     )
     .map_err(|e| e.to_string())?;
 
-    let mut sql = String::new();
+    let mut contents = Vec::new();
     for f in db_runtime::mariadb_bootstrap_sql_files(&share) {
         let content = std::fs::read_to_string(&f)
             .map_err(|e| format!("File bootstrap {} tidak terbaca: {}", f.display(), e))?;
-        sql.push_str(&content);
-        sql.push('\n');
+        contents.push(content);
     }
-    sql.push_str(&db_runtime::mariadb_set_root_password_sql(&password));
+    let sql = db_runtime::assemble_mariadb_bootstrap_sql(&contents, &password);
     let (ok, out) = run_capture(
         state,
         &binary,
@@ -975,9 +969,7 @@ mod tests {
                 "-c",
                 "/data/selftest/servers/selftest-nginx/nginx/nginx.conf",
                 "-p",
-                "/data/selftest/servers/selftest-nginx/nginx",
-                "-g",
-                "daemon off;"
+                "/data/selftest/servers/selftest-nginx/nginx"
             ]
         );
         assert_eq!(nginx.cwd, home);

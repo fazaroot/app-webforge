@@ -240,20 +240,33 @@ EOF
 }
 
 force_static_modules() {
-  log "Memaksa modul ekstensi esensial menjadi statis"
+  log "Memaksa semua modul ekstensi aktif menjadi statis"
   "$BUILD_PYTHON" - <<'PY'
 import pathlib
+import re
 import sys
 
 setup_files = [pathlib.Path("Modules/Setup.stdlib"), pathlib.Path("Modules/Setup")]
 setup_files = [f for f in setup_files if f.is_file()]
 local = pathlib.Path("Modules/Setup.local")
-targets = {
-    "_ssl", "_hashlib", "_sqlite3", "_ctypes", "_socket", "_json",
-    "_asyncio", "_multiprocessing", "_queue", "_datetime", "_decimal",
-    "zlib", "_bz2", "_lzma", "_struct", "_random", "_bisect", "_heapq",
+# Modul uji dan modul yang memang harus shared tidak dipindah. Semua
+# modul lain yang configure tandai aktif (baris tidak diawali '#') wajib
+# statis: stdlib zip tidak membawa lib-dynload, dan Android tidak bisa
+# dlopen .so dari folder data aplikasi yang bisa ditulis.
+excluded = {
+    "xxsubtype", "_xxtestfuzz", "_testbuffer", "_testinternalcapi",
+    "_testcapi", "_testclinic", "_testimportmultiple",
+    "_testmultiphase", "_testsinglephase", "_ctypes_test",
+    "xxlimited", "xxlimited_35",
 }
-critical = {"_ssl", "_hashlib", "_sqlite3", "_socket", "zlib"}
+critical = {
+    "math", "cmath", "_random", "_socket", "_ssl", "_hashlib",
+    "_sqlite3", "zlib", "_json", "_datetime", "_struct", "binascii",
+    "_decimal", "_ctypes", "_bz2", "_lzma", "array", "_bisect",
+    "_heapq", "_pickle", "_queue", "_asyncio", "_multiprocessing",
+    "_csv", "_contextvars", "unicodedata", "pyexpat", "_elementtree",
+}
+module_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 if not setup_files:
     print("Modules/Setup.stdlib/Setup tidak ditemukan setelah configure", file=sys.stderr)
     raise SystemExit(1)
@@ -262,26 +275,39 @@ moved = []
 found = set()
 for setup in setup_files:
     kept = []
+    current_name = None
+    current_moved = False
     for line in setup.read_text().splitlines():
         stripped = line.strip()
+        if line[:1].isspace() and current_name is not None:
+            # Baris lanjutan entri modul sebelumnya.
+            if current_moved:
+                moved.append(line)
+            else:
+                kept.append(line)
+            continue
+        current_name = None
+        current_moved = False
         if not stripped or stripped.startswith("#") or stripped.startswith("*"):
             kept.append(line)
             continue
-        first = stripped.split()[0]
-        if first in targets:
+        parts = stripped.split()
+        first = parts[0]
+        if len(parts) >= 2 and module_re.match(first) and first not in excluded:
             moved.append(line)
             found.add(first)
+            current_name = first
+            current_moved = True
         else:
             kept.append(line)
+            if len(parts) >= 2 and module_re.match(first):
+                current_name = first
     setup.write_text("\n".join(kept) + "\n")
 
 missing_critical = sorted(critical - found)
 if missing_critical:
-    print(f"Modul kritis tidak ada di Setup.stdlib/Setup: {missing_critical}", file=sys.stderr)
+    print(f"Modul kritis tidak aktif di Setup.stdlib/Setup: {missing_critical}", file=sys.stderr)
     raise SystemExit(1)
-missing = sorted(targets - found)
-if missing:
-    print(f"Peringatan: modul nonkritis tidak ditemukan untuk dijadikan statis: {missing}", file=sys.stderr)
 
 local.write_text("*static*\n" + "\n".join(moved) + "\n")
 print("Modul statis:", ", ".join(sorted(found)))
@@ -294,17 +320,26 @@ verify_static_modules() {
     echo "Modules/config.c tidak ditemukan; tidak bisa memverifikasi modul statis" >&2
     exit 1
   fi
-  for mod in _ssl _hashlib _sqlite3 _socket zlib; do
+  echo "Modul statis terdaftar di Modules/config.c:"
+  grep -o 'PyInit_[A-Za-z0-9_]*' "$config_c" | sort -u || true
+  for mod in math cmath _random _socket _ssl _hashlib _sqlite3 zlib _json _datetime _struct binascii _decimal _ctypes _bz2 _lzma array _bisect _heapq _pickle _queue _asyncio _multiprocessing _csv _contextvars unicodedata pyexpat _elementtree; do
     if ! grep -q "PyInit_${mod}" "$config_c"; then
       echo "Modul kritis $mod tidak statis di libpython" >&2
       exit 1
     fi
   done
-  for mod in _ctypes _json _asyncio _multiprocessing _queue _datetime _decimal _bz2 _lzma _struct _random _bisect _heapq; do
-    if ! grep -q "PyInit_${mod}" "$config_c"; then
-      echo "Peringatan: modul $mod tidak statis; fallback Python murni atau fitur terkait mungkin tidak tersedia" >&2
-    fi
-  done
+  local nm_tool="$TOOLCHAIN/bin/llvm-nm"
+  [ -x "$nm_tool" ] || nm_tool="nm"
+  if [ -f python ] && command -v "$nm_tool" >/dev/null 2>&1; then
+    echo "Simbol PyInit kritis pada binary Python sebelum strip:"
+    for mod in math _random _socket _ssl _sqlite3; do
+      if ! "$nm_tool" python | grep -q "PyInit_${mod}$"; then
+        echo "Simbol PyInit_${mod} tidak ditemukan pada binary Python" >&2
+        exit 1
+      fi
+      echo "OK: PyInit_${mod}"
+    done
+  fi
 }
 
 verify_elf() {
@@ -370,6 +405,25 @@ build_python() {
   if [ ! -d "$installed_stdlib" ]; then
     echo "Stdlib hasil install tidak ditemukan: $installed_stdlib" >&2
     exit 1
+  fi
+
+  if [ -d "$installed_stdlib/lib-dynload" ]; then
+    echo "Isi lib-dynload hasil install (tidak dikemas; modul non-uji harus statis):"
+    find "$installed_stdlib/lib-dynload" -maxdepth 1 -type f -name '*.so' -print | sort || true
+    while IFS= read -r dynload_so; do
+      [ -n "$dynload_so" ] || continue
+      dynload_name="$(basename "$dynload_so")"
+      dynload_mod="${dynload_name%%.*}"
+      case "$dynload_mod" in
+        xxsubtype|_xxtestfuzz|_testbuffer|_testinternalcapi|_testcapi|_testclinic|_testimportmultiple|_testmultiphase|_testsinglephase|_ctypes_test|xxlimited|xxlimited_35) ;;
+        *)
+          echo "Modul non-uji masih shared di lib-dynload: $dynload_name" >&2
+          exit 1
+          ;;
+      esac
+    done <<EOF
+$(find "$installed_stdlib/lib-dynload" -maxdepth 1 -type f -name '*.so' | sort)
+EOF
   fi
 
   if [ -f "$src/python" ]; then

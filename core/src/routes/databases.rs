@@ -502,12 +502,7 @@ async fn start_postgres(state: &AppState, row: &sqlx::sqlite::SqliteRow) -> Resu
     for dir in db_runtime::postgres_required_dirs(&home) {
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     }
-    for (link, target) in db_runtime::postgres_symlinks(&home, &native_dir) {
-        if !link.exists() {
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&target, &link).map_err(|e| e.to_string())?;
-        }
-    }
+    db_runtime::ensure_postgres_symlinks(&home, &native_dir)?;
     let share = ensure_share(state, "postgresql", &home)?;
     let data_dir = db_runtime::postgres_data_dir(&home);
     if !data_dir.join("PG_VERSION").is_file() {
@@ -587,14 +582,13 @@ async fn start_mariadb(state: &AppState, row: &sqlx::sqlite::SqliteRow) -> Resul
     let binary = db_runtime::mariadb_binary_path(&native_dir);
     let data_dir = db_runtime::mariadb_data_dir(&home);
     if !data_dir.join("mysql").is_dir() {
-        let mut sql = String::new();
+        let mut contents = Vec::new();
         for f in db_runtime::mariadb_bootstrap_sql_files(&share) {
             let content = std::fs::read_to_string(&f)
                 .map_err(|e| format!("File bootstrap {} tidak terbaca: {}", f.display(), e))?;
-            sql.push_str(&content);
-            sql.push('\n');
+            contents.push(content);
         }
-        sql.push_str(&db_runtime::mariadb_set_root_password_sql(&password));
+        let sql = db_runtime::assemble_mariadb_bootstrap_sql(&contents, &password);
         let (ok, out) = run_command(
             &binary,
             &db_runtime::mariadb_bootstrap_args(&home),

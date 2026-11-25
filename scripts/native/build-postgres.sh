@@ -9,8 +9,12 @@
 # Binary dikemas sebagai lib*.so agar sah dieksekusi dari nativeLibraryDir
 # (W^X Android 10+). Di perangkat, core membuat symlink bin/postgres ->
 # libpostgres.so di home instance dan menjalankannya dengan argv[0] path
-# symlink itu; build ini mematikan HAVE_PROC_SELF_EXE agar PostgreSQL
-# menyelesaikan share/ relatif terhadap argv[0], bukan /proc/self/exe.
+# symlink itu. PostgreSQL upstream menormalisasi path executable dengan
+# realpath(), yang menembus symlink ke nativeLibraryDir dan membuat
+# initdb mencari program "postgres" di folder lib*.so. Build ini
+# mempatch normalize_exec_path agar path argv[0] hanya dibuat absolut
+# secara leksikal (tanpa realpath), sehingga pencarian program
+# pendamping dan share/ tetap relatif terhadap symlink bin/.
 # Lihat core/src/db_runtime.rs untuk kontrak runtime-nya.
 #
 # Keputusan build:
@@ -61,7 +65,7 @@ fail() { echo "::error::[build-postgres] $*" >&2; exit 1; }
 
 mkdir -p "$WORK_DIR" "$OUT_DIR" "$PREFIX/lib/pkgconfig" "$PREFIX/include" "$SRC_DIR"
 
-for tool in curl tar patch git perl make zip readelf file sha256sum; do
+for tool in curl tar patch git perl make zip readelf file sha256sum python3; do
   command -v "$tool" >/dev/null || fail "tool host tidak ditemukan: $tool"
 done
 command -v flex >/dev/null || log "peringatan: flex tidak ada (tarball rilis PG sudah berisi file hasil generate)"
@@ -158,6 +162,74 @@ if grep -rq "@TERMUX_" src include 2>/dev/null; then
   grep -rl "@TERMUX_" src include | head -20 || true
 fi
 
+# Patch WebForge: pertahankan lokasi symlink argv[0]. Upstream
+# normalize_exec_path() memakai realpath(), sehingga bin/initdb ->
+# libinitdb.so berubah menjadi path nativeLibraryDir dan find_other_exec
+# gagal menemukan "postgres" di direktori yang sama. Versi patch hanya
+# membuat path absolut + canonicalize_path (leksikal), tanpa realpath.
+python3 - <<'PYEOF'
+import pathlib
+import re
+import sys
+
+path = pathlib.Path("src/common/exec.c")
+text = path.read_text()
+marker = "WebForge: preserve argv0 symlink location"
+if marker in text:
+    print("patch normalize_exec_path sudah diterapkan")
+    raise SystemExit(0)
+
+pattern = re.compile(
+    r"static int\nnormalize_exec_path\(char \*path\)\n\{.*?\n\}\n",
+    re.DOTALL,
+)
+replacement = '''static int
+normalize_exec_path(char *path)
+{
+    /* WebForge: preserve argv0 symlink location. Android packages the
+     * real binaries as lib*.so in nativeLibraryDir and core invokes
+     * them through bin/postgres, bin/initdb, etc. symlinks in the
+     * instance home. realpath() would resolve those symlinks back to
+     * nativeLibraryDir, breaking find_other_exec() and share lookup.
+     * Make the path absolute lexically instead. */
+    char        abspath[MAXPGPATH];
+
+    if (is_absolute_path(path))
+    {
+        strlcpy(abspath, path, sizeof(abspath));
+    }
+    else
+    {
+        char        cwd[MAXPGPATH];
+
+        if (getcwd(cwd, sizeof(cwd)) == NULL)
+        {
+            log_error(errcode_for_file_access(),
+                      _("could not resolve path \\"%s\\" to absolute form: %m"),
+                      path);
+            return -1;
+        }
+        join_path_components(abspath, cwd, path);
+    }
+
+    canonicalize_path(abspath);
+    strlcpy(path, abspath, MAXPGPATH);
+    return 0;
+}
+'''
+new_text, count = pattern.subn(lambda _match: replacement, text, count=1)
+if count != 1:
+    print("Patch normalize_exec_path gagal: fungsi upstream tidak ditemukan", file=sys.stderr)
+    raise SystemExit(1)
+path.write_text(new_text)
+print("patch normalize_exec_path: ok")
+PYEOF
+grep -q "WebForge: preserve argv0 symlink location" src/common/exec.c || fail "patch normalize_exec_path tidak terverifikasi di src/common/exec.c"
+if grep -A45 "normalize_exec_path(char \*path)" src/common/exec.c | grep -q "pg_realpath(path)"; then
+  fail "normalize_exec_path masih memanggil pg_realpath(path)"
+fi
+log "patch normalize_exec_path terverifikasi"
+
 # --- Shim Termux (opsional, statis) ---
 SHIM_LIBS=""
 SHIM_STATUS="tidak dibangun"
@@ -251,8 +323,10 @@ export LIBS="-lssl -lcrypto${SHIM_LIBS} -ldl"
   pgac_cv_prog_cc_LDFLAGS__Wl___as_needed=yes \
   CC="$CC" CXX="$CXX" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP"
 
-# Runtime memakai argv[0] symlink untuk menemukan share/; /proc/self/exe
-# akan menembus symlink ke nativeLibraryDir dan merusak resolusi itu.
+# Runtime memakai argv[0] symlink untuk menemukan share/ dan program
+# pendamping; patch normalize_exec_path di atas adalah mekanisme
+# utamanya. Undef ini dipertahankan sebagai pengaman bila konfigurasi
+# platform mengaktifkan resolusi /proc/self/exe di jalur lain.
 sed -i 's|^#define HAVE_PROC_SELF_EXE 1$|/* #undef HAVE_PROC_SELF_EXE (WebForge: resolusi argv0) */|' src/include/pg_config.h
 # libpq.so tetap terbuild dan initdb menautnya dinamis (libpq.so.5 tidak
 # bisa dikemas sebagai .so APK). Bangun libpq.a saja agar tool frontend

@@ -38,8 +38,10 @@
 #   - crypt(): Bionic tidak menyediakan crypt(); Nginx jatuh ke
 #     DES_crypt dari OpenSSL statis untuk http_auth_basic_module.
 #     OpenSSL karena itu dibangun tanpa menonaktifkan DES.
-#   - Prefix compile-time (/webforge/...) hanya placeholder; runtime
-#     memakai -p server_home dan config hasil generate core.
+#   - Prefix compile-time (/webforge/nginx) hanya placeholder; path
+#     bawaan error log/pid/temp dibuat relatif terhadap prefix agar
+#     runtime -p server_home menyelesaikannya ke server home, bukan
+#     ke /webforge yang tidak bisa ditulis aplikasi Android.
 set -euo pipefail
 
 NGINX_VERSION="${NGINX_VERSION:-1.26.2}"
@@ -314,15 +316,15 @@ $CC -O2 -fPIC -c "$WORK_DIR/glob_shim.c" -o "$WORK_DIR/glob_shim.o"
 if ! ./configure \
   --prefix=/webforge/nginx \
   --sbin-path=/webforge/nginx \
-  --conf-path=/webforge/nginx.conf \
-  --error-log-path=/webforge/error.log \
-  --pid-path=/webforge/nginx.pid \
-  --lock-path=/webforge/nginx.lock \
-  --http-client-body-temp-path=/webforge/client_body_temp \
-  --http-proxy-temp-path=/webforge/proxy_temp \
-  --http-fastcgi-temp-path=/webforge/fastcgi_temp \
-  --http-uwsgi-temp-path=/webforge/uwsgi_temp \
-  --http-scgi-temp-path=/webforge/scgi_temp \
+  --conf-path=nginx.conf \
+  --error-log-path=logs/error.log \
+  --pid-path=nginx.pid \
+  --lock-path=nginx.lock \
+  --http-client-body-temp-path=tmp/client_body \
+  --http-proxy-temp-path=tmp/proxy \
+  --http-fastcgi-temp-path=tmp/fastcgi \
+  --http-uwsgi-temp-path=tmp/uwsgi \
+  --http-scgi-temp-path=tmp/scgi \
   --with-cc="$CC" \
   --with-cc-opt="-I$PREFIX/include -O2" \
   --with-ld-opt="-L$PREFIX/lib" \
@@ -335,6 +337,16 @@ if ! ./configure \
   exit 1
 fi
 
+
+if ! grep -q '#define NGX_ERROR_LOG_PATH "logs/error.log"' objs/ngx_auto_config.h; then
+  echo "::error::NGX_ERROR_LOG_PATH bukan logs/error.log relatif; Nginx akan mencoba membuka error log compile-time di luar prefix runtime." >&2
+  grep -E "NGX_ERROR_LOG_PATH|NGX_PREFIX" objs/ngx_auto_config.h || true
+  exit 1
+fi
+if grep -q '/webforge/error.log' objs/ngx_auto_config.h; then
+  echo "::error::Path /webforge/error.log masih terbakar di konfigurasi Nginx." >&2
+  exit 1
+fi
 
 # Tautkan shim glob hanya pada link akhir nginx (bukan uji fitur configure).
 sed -i "s|\$(LINK) -o objs/nginx|\$(LINK) -o objs/nginx $WORK_DIR/glob_shim.o|" objs/Makefile

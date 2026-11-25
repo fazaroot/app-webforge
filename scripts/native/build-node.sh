@@ -16,6 +16,7 @@ set -euo pipefail
 # Output:
 #   $OUTPUT_DIR/libnode.so
 #   $OUTPUT_DIR/libwebforge_node.so
+#   $OUTPUT_DIR/libc++_shared.so (dependensi DT_NEEDED shim dari NDK)
 #   $OUTPUT_DIR/npm.tgz
 #   $OUTPUT_DIR/node-version.txt
 
@@ -150,5 +151,25 @@ if ! "$READELF" -d "$OUTPUT_DIR/libwebforge_node.so" | grep '\[libnode\.so\]' >/
   exit 1
 fi
 
+log "Kemas libc++_shared.so dari NDK"
+LIBCXX_SHARED="$TOOLCHAIN/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
+if [ ! -f "$LIBCXX_SHARED" ]; then
+  LIBCXX_SHARED="$(find "$TOOLCHAIN/sysroot/usr/lib" -path '*aarch64-linux-android/libc++_shared.so' -type f | head -1)"
+fi
+if [ -z "$LIBCXX_SHARED" ] || [ ! -f "$LIBCXX_SHARED" ]; then
+  echo "libc++_shared.so tidak ditemukan di sysroot NDK" >&2
+  exit 1
+fi
+cp "$LIBCXX_SHARED" "$OUTPUT_DIR/libc++_shared.so"
+verify_elf "$OUTPUT_DIR/libc++_shared.so"
+if ! "$READELF" -d "$OUTPUT_DIR/libwebforge_node.so" | grep '\[libc++_shared\.so\]' >/dev/null; then
+  echo "libwebforge_node.so tidak bergantung pada libc++_shared.so; periksa apakah shim berubah menjadi static STL" >&2
+  exit 1
+fi
+echo "DT_NEEDED libnode.so:"
+"$READELF" -d "$OUTPUT_DIR/libnode.so" | grep NEEDED || true
+echo "DT_NEEDED libwebforge_node.so:"
+"$READELF" -d "$OUTPUT_DIR/libwebforge_node.so" | grep NEEDED || true
+
 printf '%s\nnpm %s\n' "$NODEJS_MOBILE_VERSION" "$NPM_VERSION" > "$OUTPUT_DIR/node-version.txt"
-log "Selesai: $OUTPUT_DIR/libnode.so, $OUTPUT_DIR/libwebforge_node.so, $OUTPUT_DIR/npm.tgz, $OUTPUT_DIR/node-version.txt"
+log "Selesai: $OUTPUT_DIR/libnode.so, $OUTPUT_DIR/libwebforge_node.so, $OUTPUT_DIR/libc++_shared.so, $OUTPUT_DIR/npm.tgz, $OUTPUT_DIR/node-version.txt"
