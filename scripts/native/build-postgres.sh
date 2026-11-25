@@ -141,10 +141,13 @@ for patch_file in "$TERMUX_DIR"/packages/postgresql/*.patch; do
   # Patch Termux memakai placeholder @TERMUX_PREFIX@ yang diganti build
   # system Termux; di sini diganti prefix placeholder WebForge.
   sed "s|@TERMUX_PREFIX@|${PG_PREFIX_PLACEHOLDER}|g" "$patch_file" > "$WORK_DIR/current.patch"
-  if ! patch -p1 --dry-run < "$WORK_DIR/current.patch" >/dev/null; then
+  if patch -p1 -R --dry-run < "$WORK_DIR/current.patch" >/dev/null 2>&1; then
+    log "patch sudah diterapkan (cache): $patch_name"
+  elif patch -p1 --dry-run < "$WORK_DIR/current.patch" >/dev/null; then
+    patch -p1 < "$WORK_DIR/current.patch" >/dev/null
+  else
     fail "patch Termux gagal diterapkan: $patch_name (source PG $PG_VERSION vs termux@$TERMUX_COMMIT)"
   fi
-  patch -p1 < "$WORK_DIR/current.patch" >/dev/null
   PATCHES_APPLIED="${PATCHES_APPLIED} ${patch_name}"
   log "patch diterapkan: $patch_name"
 done

@@ -150,10 +150,13 @@ if [ "$APPLY_TERMUX_PATCHES" = "1" ]; then
   for patch_file in "$TERMUX_DIR"/packages/mariadb/*.patch; do
     patch_name=$(basename "$patch_file")
     sed "s|@TERMUX_PREFIX@|/webforge/mariadb|g" "$patch_file" > "$WORK_DIR/current.patch"
-    if ! patch -p1 --dry-run < "$WORK_DIR/current.patch" >/dev/null; then
+    if patch -p1 -R --dry-run < "$WORK_DIR/current.patch" >/dev/null 2>&1; then
+      log "patch sudah diterapkan (cache): $patch_name"
+    elif patch -p1 --dry-run < "$WORK_DIR/current.patch" >/dev/null; then
+      patch -p1 < "$WORK_DIR/current.patch" >/dev/null
+    else
       fail "patch Termux gagal diterapkan: $patch_name (patch seri Termux saat ini tidak terbukti untuk MariaDB $MARIADB_VERSION)"
     fi
-    patch -p1 < "$WORK_DIR/current.patch" >/dev/null
     PATCHES_APPLIED="${PATCHES_APPLIED} ${patch_name}"
     log "patch diterapkan: $patch_name"
   done
@@ -201,10 +204,30 @@ if [ ! -f "$HOST_BUILD/import_executables.cmake" ]; then
 fi
 [ -f "$HOST_BUILD/import_executables.cmake" ] || fail "import_executables.cmake tidak dihasilkan host build"
 
-# Curses hanya dibutuhkan readline klien; mariadbd tidak membutuhkannya.
-# Longgarkan FIND_CURSES agar configure target tidak gagal tanpa ncurses.
-sed -i 's/FIND_PACKAGE(Curses REQUIRED)/FIND_PACKAGE(Curses)\n IF(NOT CURSES_FOUND)\n  SET(CURSES_LIBRARY "")\n ENDIF()/' "$MARIADB_SRC/cmake/readline.cmake"
-sed -i 's/MESSAGE(FATAL_ERROR ${ERRORMSG})/MESSAGE(STATUS "Curses tidak ditemukan; readline klien dinonaktifkan di target Android")/' "$MARIADB_SRC/cmake/readline.cmake"
+# --- ncurses statis untuk readline klien (configure mewajibkan Curses) ---
+if [ ! -f "$PREFIX/lib/libncurses.a" ]; then
+  log "build ncurses 6.5 (statis)"
+  if [ ! -f "$WORK_DIR/ncurses.tar.gz" ]; then
+    curl -fsSL --retry 3 -o "$WORK_DIR/ncurses.tar.gz.tmp" "https://ftp.gnu.org/pub/gnu/ncurses/ncurses-6.5.tar.gz"
+    mv "$WORK_DIR/ncurses.tar.gz.tmp" "$WORK_DIR/ncurses.tar.gz"
+  fi
+  rm -rf "$WORK_DIR/ncurses-6.5"
+  tar -xzf "$WORK_DIR/ncurses.tar.gz" -C "$WORK_DIR"
+  (
+    cd "$WORK_DIR/ncurses-6.5"
+    CC="$CC" BUILD_CC=gcc ./configure \
+      --host=aarch64-linux-android \
+      --prefix="$PREFIX" \
+      --without-ada --without-cxx --without-progs --without-tests \
+      --without-manpages --disable-db-install \
+      --enable-static --disable-shared --disable-widec \
+      --with-normal --without-debug --enable-overwrite \
+      AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP"
+    make -j"$(nproc)"
+    make install.libs install.includes
+  )
+fi
+[ -f "$PREFIX/lib/libncurses.a" ] || fail "libncurses.a tidak terbuild"
 
 # --- Target build Android ---
 log "configure MariaDB $MARIADB_VERSION untuk aarch64-linux-android$ANDROID_API"
@@ -214,6 +237,8 @@ cmake -S "$MARIADB_SRC" -B "$TARGET_BUILD" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DANDROID_PLATFORM="android-${ANDROID_API}" \
   -DANDROID_STL=c++_static \
   -DCMAKE_PREFIX_PATH="$PREFIX" \
+  -DCURSES_LIBRARY="$PREFIX/lib/libncurses.a" \
+  -DCURSES_INCLUDE_PATH="$PREFIX/include" \
   -DIMPORT_EXECUTABLES="$HOST_BUILD/import_executables.cmake" \
   -DWITH_SSL=system \
   -DCMAKE_FIND_ROOT_PATH="$PREFIX" \

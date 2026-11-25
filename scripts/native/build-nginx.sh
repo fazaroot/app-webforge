@@ -326,7 +326,6 @@ if ! ./configure \
   --with-cc="$CC" \
   --with-cc-opt="-I$PREFIX/include -O2" \
   --with-ld-opt="-L$PREFIX/lib" \
-  --with-threads \
   --with-http_realip_module \
   --with-http_gzip_static_module \
   --with-http_stub_status_module \
