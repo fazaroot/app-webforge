@@ -192,7 +192,7 @@ if [ ! -f "$HOST_BUILD/import_executables.cmake" ]; then
     export CXX=g++
     cmake -S "$MARIADB_SRC" -B "$HOST_BUILD" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
       "${COMMON_CMAKE_ARGS[@]}" \
-      -DWITH_SSL=bundled \
+      -DWITH_SSL=system \
       -DWITH_ZLIB=bundled
     cmake --build "$HOST_BUILD" -j"$(nproc)" --target comp_err gen_lex_hash comp_sql gen_lex_token
   )

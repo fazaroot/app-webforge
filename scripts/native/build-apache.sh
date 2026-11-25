@@ -170,13 +170,6 @@ tar -xzf "$DL/pcre2.tar.gz" -C "$SRC"
     --disable-jit \
     --enable-unicode \
     CC="$CC" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP"
-  # gen_test_char harus berjalan di host: bangun versi host-nya dan tandai
-  # hasil generate sebagai mutakhir agar make tidak membangun ulang target.
-  cc -DCROSS_COMPILE -o server/gen_test_char server/gen_test_char.c
-  ./server/gen_test_char > server/test_char.h
-  touch server/gen_test_char.lo
-  touch server/gen_test_char
-  touch server/test_char.h
   make -j"$JOBS" CC_FOR_BUILD=cc
   make install
 )
@@ -267,6 +260,13 @@ tar -xzf "$DL/httpd.tar.gz" -C "$SRC"
     CC="$CC" CXX="$CXX" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP" \
     "${CROSS_CACHE_VARS[@]}" \
     ac_cv_func_poll=yes
+  # gen_test_char harus berjalan di host: bangun versi host-nya dan tandai
+  # hasil generate sebagai mutakhir agar make tidak membangun ulang target.
+  cc -DCROSS_COMPILE -o server/gen_test_char server/gen_test_char.c
+  ./server/gen_test_char > server/test_char.h
+  touch server/gen_test_char.lo
+  touch server/gen_test_char
+  touch server/test_char.h
   make -j"$JOBS" CC_FOR_BUILD=cc
 )
 

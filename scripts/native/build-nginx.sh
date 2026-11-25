@@ -211,6 +211,8 @@ export NGX_WITH_NGX_HAVE_CRYPT=0
 # ngx_linux_config.h meng-include <crypt.h> tanpa syarat; Bionic API 26
 # tidak menyediakannya dan auth_basic dimatikan, jadi include ini aman dibuang.
 sed -i 's|#include <crypt.h>|/* crypt.h tidak tersedia di Bionic API 26 */|' src/os/unix/ngx_linux_config.h
+sed -i 's|#include <glob.h>|#include <glob.h>\nint wf_glob(const char *, int, int (*)(const char *, int), glob_t *);\nvoid wf_globfree(glob_t *);|' src/os/unix/ngx_linux_config.h
+sed -i 's|n = glob((char \*) gl->pattern|n = wf_glob((char *) gl->pattern|; s|globfree(&gl->pglob)|wf_globfree(\&gl->pglob)|' src/os/unix/ngx_files.c
 
 
 # Bionic API 26 tidak menyediakan glob()/globfree() (baru API 28), padahal
@@ -221,8 +223,8 @@ cat > "$WORK_DIR/glob_shim.h" <<'EOF'
 #ifndef WEBFORGE_GLOB_SHIM_H
 #define WEBFORGE_GLOB_SHIM_H
 #include <glob.h>
-int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob_t *pglob);
-void globfree(glob_t *pglob);
+int wf_glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob_t *pglob);
+void wf_globfree(glob_t *pglob);
 #endif
 EOF
 cat > "$WORK_DIR/glob_shim.c" <<'EOF'
@@ -240,7 +242,7 @@ static int cmp_str(const void *a, const void *b) {
     return strcmp(*(char *const *)a, *(char *const *)b);
 }
 
-int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob_t *pglob) {
+int wf_glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob_t *pglob) {
     (void)errfunc;
     const char *slash = strrchr(pattern, '/');
     const char *base = slash ? slash + 1 : pattern;
@@ -288,7 +290,7 @@ int glob(const char *pattern, int flags, int (*errfunc)(const char *, int), glob
     return 0;
 }
 
-void globfree(glob_t *pglob) {
+void wf_globfree(glob_t *pglob) {
     if (!pglob) return;
     for (size_t i = 0; i < pglob->gl_pathc; i++) free(pglob->gl_pathv[i]);
     free(pglob->gl_pathv);
@@ -311,7 +313,7 @@ $CC -O2 -fPIC -c "$WORK_DIR/glob_shim.c" -o "$WORK_DIR/glob_shim.o"
   --http-uwsgi-temp-path=/webforge/uwsgi_temp \
   --http-scgi-temp-path=/webforge/scgi_temp \
   --with-cc="$CC" \
-  --with-cc-opt="-I$PREFIX/include -O2 -include $WORK_DIR/glob_shim.h" \
+  --with-cc-opt="-I$PREFIX/include -O2" \
   --with-ld-opt="-L$PREFIX/lib $WORK_DIR/glob_shim.o" \
   --with-threads \
   --with-http_realip_module \
