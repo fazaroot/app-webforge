@@ -190,7 +190,7 @@ if [ ! -f "$HOST_BUILD/import_executables.cmake" ]; then
     unset AR RANLIB STRIP
     export CC=gcc
     export CXX=g++
-    cmake -S "$MARIADB_SRC" -B "$HOST_BUILD" \
+    cmake -S "$MARIADB_SRC" -B "$HOST_BUILD" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
       "${COMMON_CMAKE_ARGS[@]}" \
       -DWITH_SSL=bundled \
       -DWITH_ZLIB=bundled
@@ -201,7 +201,7 @@ fi
 
 # --- Target build Android ---
 log "configure MariaDB $MARIADB_VERSION untuk aarch64-linux-android$ANDROID_API"
-cmake -S "$MARIADB_SRC" -B "$TARGET_BUILD" \
+cmake -S "$MARIADB_SRC" -B "$TARGET_BUILD" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a \
   -DANDROID_PLATFORM="android-${ANDROID_API}" \

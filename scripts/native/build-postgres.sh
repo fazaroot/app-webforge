@@ -160,20 +160,26 @@ SHIM_LIBS=""
 SHIM_STATUS="tidak dibangun"
 if [ -f "$TERMUX_DIR/packages/libandroid-shmem/shmem.c" ]; then
   log "build libandroid-shmem (statis)"
-  $CC -O2 -fPIC -c "$TERMUX_DIR/packages/libandroid-shmem/shmem.c" -o "$WORK_DIR/shmem.o"
-  $AR rcs "$PREFIX/lib/libandroid-shmem.a" "$WORK_DIR/shmem.o"
-  SHIM_LIBS="$SHIM_LIBS -landroid-shmem"
-  SHIM_STATUS="libandroid-shmem"
+  if $CC -O2 -fPIC -c "$TERMUX_DIR/packages/libandroid-shmem/shmem.c" -o "$WORK_DIR/shmem.o"; then
+    $AR rcs "$PREFIX/lib/libandroid-shmem.a" "$WORK_DIR/shmem.o"
+    SHIM_LIBS="$SHIM_LIBS -landroid-shmem"
+    SHIM_STATUS="libandroid-shmem"
+  else
+    log "peringatan: libandroid-shmem gagal dikompilasi; lanjut tanpa shim shmem"
+  fi
 fi
 if [ -f "$TERMUX_DIR/packages/libandroid-execinfo/execinfo.c" ]; then
   log "build libandroid-execinfo (statis)"
-  $CC -O2 -fPIC -c "$TERMUX_DIR/packages/libandroid-execinfo/execinfo.c" -o "$WORK_DIR/execinfo.o"
-  $AR rcs "$PREFIX/lib/libandroid-execinfo.a" "$WORK_DIR/execinfo.o"
-  if [ -f "$TERMUX_DIR/packages/libandroid-execinfo/execinfo.h" ]; then
-    cp "$TERMUX_DIR/packages/libandroid-execinfo/execinfo.h" "$PREFIX/include/"
+  if $CC -O2 -fPIC -c "$TERMUX_DIR/packages/libandroid-execinfo/execinfo.c" -o "$WORK_DIR/execinfo.o"; then
+    $AR rcs "$PREFIX/lib/libandroid-execinfo.a" "$WORK_DIR/execinfo.o"
+    if [ -f "$TERMUX_DIR/packages/libandroid-execinfo/execinfo.h" ]; then
+      cp "$TERMUX_DIR/packages/libandroid-execinfo/execinfo.h" "$PREFIX/include/"
+    fi
+    SHIM_LIBS="$SHIM_LIBS -landroid-execinfo"
+    SHIM_STATUS="${SHIM_STATUS} libandroid-execinfo"
+  else
+    log "peringatan: libandroid-execinfo gagal dikompilasi; lanjut tanpa shim execinfo (backtrace nonaktif)"
   fi
-  SHIM_LIBS="$SHIM_LIBS -landroid-execinfo"
-  SHIM_STATUS="${SHIM_STATUS} libandroid-execinfo"
 fi
 log "shim Android: $SHIM_STATUS"
 

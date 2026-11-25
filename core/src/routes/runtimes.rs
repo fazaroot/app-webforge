@@ -16,6 +16,7 @@ use std::time::Duration;
 pub struct PythonRuntimeInfo {
     pub available: bool,
     pub version: Option<String>,
+    pub executable: Option<String>,
     pub pip_available: bool,
     pub error: Option<String>,
 }
@@ -29,17 +30,19 @@ pub struct InstalledPackage {
 #[derive(Serialize)]
 pub struct PythonProjectInfo {
     pub venv_exists: bool,
-    pub requirements: Vec<String>,
-    pub entry: Option<String>,
+    pub venv_path: Option<String>,
+    pub requirements_exists: bool,
+    pub packages: Vec<InstalledPackage>,
     pub entry_kind: Option<String>,
-    pub installed_packages: Vec<InstalledPackage>,
+    pub entry: Option<String>,
 }
 
 #[derive(Serialize)]
 pub struct NodeProjectInfoOut {
+    pub package_json_exists: bool,
     pub scripts: std::collections::BTreeMap<String, String>,
     pub entry: Option<String>,
-    pub has_node_modules: bool,
+    pub node_modules_exists: bool,
     pub package_manager: Option<String>,
     pub npm_available: bool,
 }
@@ -98,6 +101,7 @@ pub async fn python_info(State(state): State<AppState>) -> ApiResult<Json<Value>
         None => PythonRuntimeInfo {
             available: false,
             version: None,
+            executable: None,
             pip_available: false,
             error: Some("Binary Python tidak ditemukan".to_string()),
         },
@@ -129,6 +133,7 @@ pub async fn python_info(State(state): State<AppState>) -> ApiResult<Json<Value>
                     PythonRuntimeInfo {
                         available: true,
                         version,
+                        executable: Some(binary.to_string_lossy().to_string()),
                         pip_available,
                         error: if pip_available {
                             None
@@ -140,12 +145,14 @@ pub async fn python_info(State(state): State<AppState>) -> ApiResult<Json<Value>
                 Ok((false, out)) => PythonRuntimeInfo {
                     available: false,
                     version: None,
+                    executable: Some(binary.to_string_lossy().to_string()),
                     pip_available: false,
                     error: Some(format!("Python gagal dijalankan: {}", out)),
                 },
                 Err(e) => PythonRuntimeInfo {
                     available: false,
                     version: None,
+                    executable: Some(binary.to_string_lossy().to_string()),
                     pip_available: false,
                     error: Some(e),
                 },
@@ -166,14 +173,12 @@ pub async fn project_python(
 ) -> ApiResult<Json<Value>> {
     let project = project_path(&state, &id).await?;
     let venv = crate::python_runtime::venv_dir(&state.config.data_dir, &id);
-    let requirements_text =
-        std::fs::read_to_string(project.join("requirements.txt")).unwrap_or_default();
-    let requirements = crate::python_runtime::parse_requirements(&requirements_text);
+    let requirements_exists = project.join("requirements.txt").is_file();
     let entry = crate::python_runtime::detect_python_entry(&project);
     let entry_kind = serde_json::to_value(entry.kind)
         .ok()
         .and_then(|v| v.as_str().map(|s| s.to_string()));
-    let mut installed_packages = Vec::new();
+    let mut packages = Vec::new();
     if let Some(binary) = crate::python_runtime::find_python_binary(state.native_lib_dir.as_deref()) {
         let envs = python_base_env(&state, &id, &binary);
         if let Ok((true, out)) = run_capture(
@@ -185,7 +190,7 @@ pub async fn project_python(
         )
         .await
         {
-            installed_packages = crate::python_runtime::parse_pip_list(&out)
+            packages = crate::python_runtime::parse_pip_list(&out)
                 .into_iter()
                 .map(|(name, version)| InstalledPackage { name, version })
                 .collect();
@@ -193,10 +198,15 @@ pub async fn project_python(
     }
     let info = PythonProjectInfo {
         venv_exists: venv.is_dir(),
-        requirements,
-        entry: Some(entry.entry),
+        venv_path: if venv.is_dir() {
+            Some(venv.to_string_lossy().to_string())
+        } else {
+            None
+        },
+        requirements_exists,
+        packages,
         entry_kind,
-        installed_packages,
+        entry: Some(entry.entry),
     };
     Ok(Json(serde_json::to_value(info).unwrap()))
 }
@@ -316,9 +326,10 @@ pub async fn project_node(
     let project = project_path(&state, &id).await?;
     let info = crate::node_runtime::inspect_node_project(&project);
     let out = NodeProjectInfoOut {
+        package_json_exists: project.join("package.json").is_file(),
         scripts: info.scripts,
         entry: info.entry,
-        has_node_modules: info.has_node_modules,
+        node_modules_exists: info.has_node_modules,
         package_manager: info.package_manager,
         npm_available: npm_cli_path(&state).is_some(),
     };

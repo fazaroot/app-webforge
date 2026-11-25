@@ -111,6 +111,26 @@ CROSS_CACHE_VARS=(
   ac_cv_sizeof_off_t=8
   ac_cv_sizeof_pid_t=4
   ac_cv_sizeof_struct_iovec=16
+  apr_cv_sizeof_char=1
+  apr_cv_sizeof_short=2
+  apr_cv_sizeof_int=4
+  apr_cv_sizeof_long=8
+  apr_cv_sizeof_long_long=8
+  apr_cv_sizeof_void_p=8
+  apr_cv_sizeof_size_t=8
+  apr_cv_sizeof_ssize_t=8
+  apr_cv_sizeof_off_t=8
+  apr_cv_sizeof_pid_t=4
+  apu_cv_sizeof_char=1
+  apu_cv_sizeof_short=2
+  apu_cv_sizeof_int=4
+  apu_cv_sizeof_long=8
+  apu_cv_sizeof_long_long=8
+  apu_cv_sizeof_void_p=8
+  apu_cv_sizeof_size_t=8
+  apu_cv_sizeof_ssize_t=8
+  apu_cv_sizeof_off_t=8
+  apu_cv_sizeof_pid_t=4
 )
 
 # --- expat (statis, via CMake + toolchain NDK) ------------------------------

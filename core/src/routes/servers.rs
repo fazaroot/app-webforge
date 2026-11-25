@@ -268,9 +268,23 @@ pub async fn server_logs(
 
 #[derive(Serialize)]
 pub struct ServerConfigOut {
+    pub engine: String,
     pub config_text: String,
     pub generated_config: String,
+    pub config_path: String,
     pub editable: bool,
+}
+
+fn config_out(state: &AppState, server: &ServerRow, config_text: String, generated: String) -> ServerConfigOut {
+    let home = crate::webservers::server_home(&state.config.data_dir, &server.id, &server.engine);
+    let filename = crate::webservers::config_filename(&server.engine).unwrap_or("config");
+    ServerConfigOut {
+        engine: server.engine.clone(),
+        config_text,
+        generated_config: generated,
+        config_path: home.join(filename).to_string_lossy().to_string(),
+        editable: true,
+    }
 }
 
 #[derive(Deserialize)]
@@ -328,11 +342,12 @@ pub async fn get_config(
 ) -> ApiResult<Json<Value>> {
     let (server, project_path) = server_and_project_path(&state, &id).await?;
     let generated = generated_config(&state, &server, &project_path)?;
-    let out = ServerConfigOut {
-        config_text: server.config_text.clone().unwrap_or_else(|| generated.clone()),
-        generated_config: generated,
-        editable: true,
-    };
+    let out = config_out(
+        &state,
+        &server,
+        server.config_text.clone().unwrap_or_else(|| generated.clone()),
+        generated,
+    );
     Ok(Json(serde_json::to_value(out).unwrap()))
 }
 
@@ -350,11 +365,7 @@ pub async fn put_config(
         .execute(&state.pool)
         .await
         .map_err(db_err)?;
-    let out = ServerConfigOut {
-        config_text: body.config_text,
-        generated_config: generated,
-        editable: true,
-    };
+    let out = config_out(&state, &server, body.config_text, generated);
     Ok(Json(serde_json::to_value(out).unwrap()))
 }
 

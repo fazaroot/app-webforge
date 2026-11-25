@@ -113,9 +113,10 @@ build_host_python_if_needed() {
   extract_to "$archive" "$host_src"
   (
     cd "$host_src"
-    ./configure --prefix="$HOST_PREFIX" --disable-test-modules
-    make -j"$JOBS"
-    make install
+    env CC=cc CXX=c++ AR=ar RANLIB=ranlib CFLAGS= CPPFLAGS= LDFLAGS= \
+      ./configure --prefix="$HOST_PREFIX" --disable-test-modules
+    env CC=cc CXX=c++ AR=ar RANLIB=ranlib make -j"$JOBS"
+    env CC=cc CXX=c++ AR=ar RANLIB=ranlib make install
   )
   BUILD_PYTHON="$HOST_PREFIX/bin/python3.12"
   if [ ! -x "$BUILD_PYTHON" ]; then
