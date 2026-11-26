@@ -512,21 +512,21 @@ jobs:
           echo "NDK: ${ANDROID_NDK_HOME:-$NDK_DIR}"
 
       - name: Build sendmail shim (arm64-v8a)
+        working-directory: sendmail-shim
         run: |
           cargo ndk -t arm64-v8a build --release \
-            --manifest-path sendmail-shim/Cargo.toml \
             --bin webforge-sendmail
-          BIN=sendmail-shim/target/aarch64-linux-android/release/webforge-sendmail
+          BIN=target/aarch64-linux-android/release/webforge-sendmail
           if [ ! -f "$BIN" ]; then
             echo "::error::Binary webforge-sendmail tidak ditemukan: $BIN"
             exit 1
           fi
-          mkdir -p sendmail-out
-          cp "$BIN" sendmail-out/libsendmail.so
+          mkdir -p ../sendmail-out
+          cp "$BIN" ../sendmail-out/libsendmail.so
           TOOLCHAIN=$(ls -d "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/* | head -1)
-          "$TOOLCHAIN/bin/llvm-strip" sendmail-out/libsendmail.so
-          chmod +x sendmail-out/libsendmail.so
-          ls -lh sendmail-out/libsendmail.so
+          "$TOOLCHAIN/bin/llvm-strip" ../sendmail-out/libsendmail.so
+          chmod +x ../sendmail-out/libsendmail.so
+          ls -lh ../sendmail-out/libsendmail.so
 
       - name: Verify sendmail shim ELF
         run: |
