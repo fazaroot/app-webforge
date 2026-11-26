@@ -1,8 +1,8 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import type {
-  ActionOutput, BackupResult, CoreStatus, CreateDatabaseBody, CreateServerBody, DatabaseInfo, Diagnostics, DirSize, FileEntry, FileRead, FileSearchHit,
-  FrameworkInfo, GitStatus, Health, LanTestResult, LogEntry, MonitoringCurrent, MonitoringPoint, NetworkInfo,
-  NodeProjectInfo, PhpCliResult, PhpRuntimeInfo, PhpSettings, PowerStatus, PythonProjectInfo, PythonRuntimeInfo,
+  ActionOutput, BackupResult, ComposerProjectInfo, ComposerRunBody, ComposerRunResult, CoreStatus, CreateDatabaseBody, CreateServerBody, DatabaseInfo, Diagnostics, DirSize, FileEntry, FileRead, FileSearchHit,
+  FrameworkInfo, GitStatus, Health, LanTestResult, LogEntry, MailSettings, MailSettingsBody, MailTestResult, MonitoringCurrent, MonitoringPoint, NetworkInfo,
+  NodeProjectInfo, PhpCliResult, PhpRuntimeInfo, PhpSettings, PowerStatus, PythonProjectInfo, PythonRuntimeInfo, SftpResetPasswordResult, SftpSettingsBody, SftpStatus,
   Project, QueryResult, RuntimeInfo, RuntimeTestResult, SecurityStatus, SelfTestResponse, ServerConfig, ServerInstance, ServerLog, SettingsMap,
   StartupLogEntry, SystemInfo, TableInfo, TerminalHistoryItem, TerminalResult, TestConnectionResult, ValidateConfigResult,
 } from './types';
@@ -229,6 +229,11 @@ export const api = {
   deleteProject: (id: string, deleteFiles: boolean) =>
     request<{ ok: boolean }>(`/api/projects/${id}`, { method: 'DELETE', body: JSON.stringify({ delete_files: deleteFiles }) }),
   scanProject: (id: string) => request<FrameworkInfo>(`/api/projects/${id}/scan`, { method: 'POST' }),
+  putProjectPhpVersion: (id: string, phpVersion: string | null) =>
+    request<Project>(`/api/projects/${id}/php-version`, { method: 'PUT', body: JSON.stringify({ php_version: phpVersion }) }),
+  projectComposer: (id: string) => request<ComposerProjectInfo>(`/api/projects/${id}/composer`),
+  runComposer: (id: string, body: ComposerRunBody) =>
+    request<ComposerRunResult>(`/api/projects/${id}/composer/run`, { method: 'POST', body: JSON.stringify(body) }),
 
   servers: () => request<ServerInstance[]>('/api/servers'),
   createServer: (body: CreateServerBody) =>
@@ -301,7 +306,19 @@ export const api = {
   putSettings: (values: SettingsMap) => request<SettingsMap>('/api/settings', { method: 'PUT', body: JSON.stringify(values) }),
   securityStatus: () => request<SecurityStatus>('/api/security/status'),
 
-  phpInfo: () => request<PhpRuntimeInfo>('/api/runtimes/php/info'),
+  phpInfo: (version?: string) => request<PhpRuntimeInfo>(`/api/runtimes/php/info${qs({ version })}`),
+  mailSettings: () => request<MailSettings>('/api/mail/settings'),
+  putMailSettings: (body: MailSettingsBody) =>
+    request<MailSettings>('/api/mail/settings', { method: 'PUT', body: JSON.stringify(body) }),
+  testMail: (to: string) =>
+    request<MailTestResult>('/api/mail/test', { method: 'POST', body: JSON.stringify({ to }) }),
+  sftpStatus: () => request<SftpStatus>('/api/sftp/status'),
+  putSftpSettings: (body: SftpSettingsBody) =>
+    request<SftpStatus>('/api/sftp/settings', { method: 'PUT', body: JSON.stringify(body) }),
+  startSftp: () => request<SftpStatus>('/api/sftp/start', { method: 'POST' }),
+  stopSftp: () => request<SftpStatus>('/api/sftp/stop', { method: 'POST' }),
+  resetSftpPassword: () =>
+    request<SftpResetPasswordResult>('/api/sftp/reset-password', { method: 'POST' }),
   phpSettings: () => request<PhpSettings>('/api/php/settings'),
   putPhpSettings: (values: PhpSettings) =>
     request<PhpSettings>('/api/php/settings', { method: 'PUT', body: JSON.stringify(values) }),

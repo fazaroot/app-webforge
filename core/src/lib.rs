@@ -12,6 +12,7 @@ pub mod routes;
 pub mod runtime;
 pub mod secrets;
 pub mod selftest;
+pub mod sftp;
 pub mod state;
 pub mod templates;
 pub mod util;
@@ -68,6 +69,7 @@ async fn build_state(config: Config) -> Result<AppState, Box<dyn std::error::Err
         log_tail_tasks: Arc::new(Mutex::new(HashMap::new())),
         log_tail_offsets: Arc::new(Mutex::new(HashMap::new())),
         health_restarting: Arc::new(Mutex::new(HashSet::new())),
+        sftp: Arc::new(sftp::SftpHandle::new()),
     };
     // Probe runtime sekali saat core start; hasilnya masuk cache TTL
     // 60 detik dan tabel runtime_versions.
@@ -106,5 +108,6 @@ pub async fn run_with_shutdown(
     for id in ids {
         process::stop_server(&state, &id).await;
     }
+    state.sftp.shutdown(&state.pool).await;
     Ok(())
 }

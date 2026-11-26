@@ -12,6 +12,12 @@ pub struct FrameworkInfo {
     pub readiness: String,
     pub notes: Vec<String>,
     pub detected_files: Vec<String>,
+    /// Constraint versi PHP dari composer.json (require.php, atau
+    /// config.platform.php bila ada). None bila proyek bukan PHP/Composer.
+    pub php_version_constraint: Option<String>,
+    /// Versi PHP terbundel terendah yang memenuhi constraint. Ini hanya
+    /// saran UI; pilihan pengguna tidak pernah ditimpa diam-diam.
+    pub recommended_php_version: Option<String>,
 }
 
 fn exists(root: &Path, rel: &str) -> bool {
@@ -137,6 +143,182 @@ fn clean_version(v: Option<&String>) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+// ---------------------------------------------------------------------------
+// Constraint versi PHP dari composer.json
+// ---------------------------------------------------------------------------
+
+/// Constraint PHP proyek: `config.platform.php` bila ada (pin eksplisit
+/// platform yang dipilih proyek), selain itu `require.php`.
+pub fn composer_php_constraint(root: &Path) -> Option<String> {
+    let text = read_text(root, "composer.json")?;
+    let v = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    if let Some(platform) = v
+        .get("config")
+        .and_then(|c| c.get("platform"))
+        .and_then(|p| p.get("php"))
+        .and_then(|x| x.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        return Some(platform.to_string());
+    }
+    v.get("require")
+        .and_then(|r| r.get("php"))
+        .and_then(|x| x.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Parse versi "8.2" / "8.2.36" menjadi (mayor, minor, patch, jumlah_bagian).
+fn parse_constraint_version(s: &str) -> Option<(u32, u32, u32, usize)> {
+    let t = s.trim().trim_start_matches('v');
+    let mut parts = t.split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = match parts.next() {
+        Some(p) => p.parse().ok()?,
+        None => return Some((major, 0, 0, 1)),
+    };
+    match parts.next() {
+        Some(p) => {
+            let patch: u32 = p.parse().ok()?;
+            if parts.next().is_some() {
+                return None;
+            }
+            Some((major, minor, patch, 3))
+        }
+        None => Some((major, minor, 0, 2)),
+    }
+}
+
+fn term_matches(term: &str, cand: (u32, u32, u32)) -> bool {
+    let term = term.trim();
+    if term.is_empty() || term == "*" || term.eq_ignore_ascii_case("x") {
+        return true;
+    }
+    // Wildcard: 8.2.*, 8.*, 8.2.x
+    if term.contains('*') || term.ends_with(".x") || term.ends_with(".X") {
+        let base = term.trim_end_matches(['*', 'x', 'X', '.']);
+        return match parse_constraint_version(base) {
+            Some((maj, min, _, 2)) => cand.0 == maj && cand.1 == min,
+            Some((maj, _, _, 1)) => cand.0 == maj,
+            _ => false,
+        };
+    }
+    if let Some(rest) = term.strip_prefix('^') {
+        return match parse_constraint_version(rest) {
+            Some((maj, min, pat, _)) => {
+                let lower = (maj, min, pat);
+                let upper = if maj > 0 {
+                    (maj + 1, 0, 0)
+                } else if min > 0 {
+                    (0, min + 1, 0)
+                } else {
+                    (0, 0, pat + 1)
+                };
+                cand >= lower && cand < upper
+            }
+            None => false,
+        };
+    }
+    if let Some(rest) = term.strip_prefix('~') {
+        return match parse_constraint_version(rest) {
+            Some((maj, min, pat, parts)) => {
+                let lower = (maj, min, pat);
+                // Semantik tilde Composer: digit terakhir yang ditulis
+                // boleh naik. ~8.2.3 -> <8.3.0; ~8.2 -> <9.0.0.
+                let upper = if parts >= 3 {
+                    (maj, min + 1, 0)
+                } else {
+                    (maj + 1, 0, 0)
+                };
+                cand >= lower && cand < upper
+            }
+            None => false,
+        };
+    }
+    for (prefix, op) in [
+        (">=", 0u8),
+        ("<=", 1),
+        ("!=", 2),
+        ("==", 3),
+        (">", 4),
+        ("<", 5),
+        ("=", 3),
+    ] {
+        if let Some(rest) = term.strip_prefix(prefix) {
+            return match parse_constraint_version(rest) {
+                Some((maj, min, pat, _)) => {
+                    let v = (maj, min, pat);
+                    match op {
+                        0 => cand >= v,
+                        1 => cand <= v,
+                        2 => cand != v,
+                        3 => cand == v,
+                        4 => cand > v,
+                        _ => cand < v,
+                    }
+                }
+                None => false,
+            };
+        }
+    }
+    // Versi polos: "8.2" berarti 8.2.* ; "8.2.0" (pin platform) berarti
+    // 8.2.* ; "8.2.36" berarti persis.
+    match parse_constraint_version(term) {
+        Some((maj, min, _, 2)) => cand.0 == maj && cand.1 == min,
+        Some((maj, min, 0, 3)) => cand.0 == maj && cand.1 == min,
+        Some((maj, min, pat, 3)) => cand == (maj, min, pat),
+        Some((maj, _, _, 1)) => cand.0 == maj,
+        _ => false,
+    }
+}
+
+fn alternative_matches(alt: &str, cand: (u32, u32, u32)) -> bool {
+    let tokens: Vec<&str> = alt
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|t| !t.is_empty())
+        .collect();
+    // Rentang hyphen "8.2 - 8.4".
+    if tokens.len() == 3 && tokens[1] == "-" {
+        let lower = parse_constraint_version(tokens[0]);
+        let upper = parse_constraint_version(tokens[2]);
+        return match (lower, upper) {
+            (Some((lmaj, lmin, lpat, _)), Some((umaj, umin, upat, uparts))) => {
+                if cand < (lmaj, lmin, lpat) {
+                    return false;
+                }
+                match uparts {
+                    3 => cand <= (umaj, umin, upat),
+                    2 => cand < (umaj, umin + 1, 0),
+                    _ => cand < (umaj + 1, 0, 0),
+                }
+            }
+            _ => false,
+        };
+    }
+    !tokens.is_empty() && tokens.iter().all(|t| term_matches(t, cand))
+}
+
+/// true bila versi kandidat memenuhi constraint Composer.
+pub fn constraint_satisfied(constraint: &str, cand: (u32, u32, u32)) -> bool {
+    constraint
+        .split("||")
+        .any(|alt| alternative_matches(alt.trim(), cand))
+}
+
+/// Versi PHP terbundel terendah yang memenuhi constraint. Kandidat
+/// dievaluasi pada versi patch terbundel (8.2.36/8.3.37/8.4.28).
+pub fn recommended_php_version(constraint: &str) -> Option<String> {
+    crate::php::PHP_VERSIONS
+        .iter()
+        .find(|spec| {
+            parse_constraint_version(spec.patch_version)
+                .map(|(a, b, c, _)| constraint_satisfied(constraint, (a, b, c)))
+                .unwrap_or(false)
+        })
+        .map(|spec| spec.version.to_string())
+}
+
 /// Detect framework. `available_runtimes` contains runtime ids known available
 /// (e.g. "static", "php", "python", "node") used to compute readiness honestly.
 pub fn detect(root: &Path, available_runtimes: &HashSet<String>) -> FrameworkInfo {
@@ -159,6 +341,10 @@ pub fn detect(root: &Path, available_runtimes: &HashSet<String>) -> FrameworkInf
     let composer = composer_deps(root);
     let node = package_deps(root);
     let py = python_deps(root);
+    let php_constraint = composer_php_constraint(root);
+    let php_recommended = php_constraint
+        .as_deref()
+        .and_then(recommended_php_version);
 
     let make = |framework: &str,
                 language: &str,
@@ -197,6 +383,8 @@ pub fn detect(root: &Path, available_runtimes: &HashSet<String>) -> FrameworkInf
             readiness,
             notes,
             detected_files: detected,
+            php_version_constraint: php_constraint.clone(),
+            recommended_php_version: php_recommended.clone(),
         }
     };
 
@@ -297,6 +485,8 @@ pub fn detect(root: &Path, available_runtimes: &HashSet<String>) -> FrameworkInf
         readiness: "unknown".to_string(),
         notes: vec!["Tidak ada file penanda framework yang dikenali".to_string()],
         detected_files: detected,
+        php_version_constraint: php_constraint,
+        recommended_php_version: php_recommended,
     }
 }
 
@@ -418,6 +608,53 @@ mod tests {
         let f = detect(&d, &avail(&["static"]));
         assert_eq!(f.framework, "Unknown");
         assert_eq!(f.readiness, "unknown");
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    #[test]
+    fn php_constraint_recommendation() {
+        assert_eq!(recommended_php_version("^8.2").as_deref(), Some("8.2"));
+        assert_eq!(recommended_php_version("^8.3").as_deref(), Some("8.3"));
+        assert_eq!(recommended_php_version(">=8.3 <8.5").as_deref(), Some("8.3"));
+        assert_eq!(recommended_php_version(">=8.2,<8.4").as_deref(), Some("8.2"));
+        assert_eq!(recommended_php_version("8.2.*").as_deref(), Some("8.2"));
+        assert_eq!(recommended_php_version("~8.3.0").as_deref(), Some("8.3"));
+        assert_eq!(recommended_php_version("^8.1 || ^8.3").as_deref(), Some("8.2"));
+        assert_eq!(recommended_php_version("8.4.28").as_deref(), Some("8.4"));
+        assert_eq!(recommended_php_version("8.2.0").as_deref(), Some("8.2"));
+        // >8.4 berarti >8.4.0, jadi kandidat 8.4.28 memenuhinya.
+        assert_eq!(recommended_php_version(">8.4").as_deref(), Some("8.4"));
+        assert_eq!(recommended_php_version(">8.4.28"), None);
+        assert_eq!(recommended_php_version("^7.4"), None);
+        assert_eq!(recommended_php_version("*").as_deref(), Some("8.2"));
+        assert!(constraint_satisfied(">=8.2 <8.4", (8, 3, 37)));
+        assert!(!constraint_satisfied(">=8.2 <8.4", (8, 4, 28)));
+        assert!(constraint_satisfied("8.2 - 8.3", (8, 3, 37)));
+    }
+
+    #[test]
+    fn detect_fills_php_constraint_fields() {
+        let d = fixture(&[
+            ("artisan", "#!/usr/bin/env php"),
+            ("composer.json", r#"{"require":{"php":"^8.3","laravel/framework":"^11.0"}}"#),
+        ]);
+        let f = detect(&d, &avail(&["static", "php"]));
+        assert_eq!(f.php_version_constraint.as_deref(), Some("^8.3"));
+        assert_eq!(f.recommended_php_version.as_deref(), Some("8.3"));
+        std::fs::remove_dir_all(&d).ok();
+
+        // config.platform.php menang atas require.php.
+        let d = fixture(&[(
+            "composer.json",
+            r#"{"require":{"php":"^8.1"},"config":{"platform":{"php":"8.2.0"}}}"#,
+        )]);
+        assert_eq!(composer_php_constraint(&d).as_deref(), Some("8.2.0"));
+        std::fs::remove_dir_all(&d).ok();
+
+        let d = fixture(&[("index.html", "<html></html>")]);
+        let f = detect(&d, &avail(&["static"]));
+        assert!(f.php_version_constraint.is_none());
+        assert!(f.recommended_php_version.is_none());
         std::fs::remove_dir_all(d).ok();
     }
 

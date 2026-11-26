@@ -5,18 +5,22 @@
 #   Runner ubuntu-latest sudah menyediakan Android SDK + NDK.
 # - libwebforge_core.so dihasilkan cargo-ndk di job android dan tidak
 #   pernah di-commit.
-# - libphp.so (PHP 8.3 CLI) di-cross-compile di job build-php untuk
-#   aarch64-linux-android (API 26) dan tidak pernah di-commit. Ekstensi
-#   target: bcmath, ctype, dom, fileinfo, filter, hash, json, mbstring,
-#   openssl, pdo, pdo_sqlite, phar, posix, session, simplexml, sockets,
-#   sqlite3, tokenizer, xml, xmlreader, xmlwriter, zip, zlib.
-#   Dependensi dibangun statis dari source: SQLite (amalgamation),
-#   libxml2 (cmake, tanpa iconv), OpenSSL, Oniguruma, libzip; zlib dari
-#   sysroot NDK. Bila sebagian ekstensi terbukti tidak bisa dikompilasi
-#   untuk Android, daftar di atas harus dikurangi di sini DAN di key
-#   cache build-php, lalu dilaporkan apa adanya — jangan klaim ekstensi
-#   yang tidak benar-benar terbuild. Daftar nyata di perangkat berasal
-#   dari `php -m` lewat endpoint /api/runtimes/php/info.
+# - PHP 8.2/8.3/8.4 (CLI + FPM) di-cross-compile di job build-php
+#   (matriks) lewat scripts/native/build-php.sh untuk
+#   aarch64-linux-android (API 26), tidak pernah di-commit. Hasil per
+#   versi: libphp<82|83|84>.so + libphpfpm<82|83|84>.so +
+#   icudt74l.dat (data ICU 74.2). Ekstensi wajib: bcmath, ctype, dom,
+#   fileinfo, filter, hash, json, libxml, mbstring, openssl, pdo,
+#   pdo_sqlite, phar, posix, session, simplexml, sockets, sqlite3,
+#   tokenizer, xml, xmlreader, xmlwriter, zip, zlib, curl, gd, exif,
+#   soap, ftp, pcntl, intl — diverifikasi build-php.sh lewat simbol
+#   phpext_<ext>_ptr pada CLI dan FPM, gagal keras bila ada yang
+#   hilang. Daftar nyata di perangkat berasal dari `php -m` lewat
+#   endpoint /api/runtimes/php/info.
+# - libsendmail.so (shim sendmail untuk PHP mail()) dibangun di job
+#   build-sendmail dari crate sendmail-shim/ (cargo-ndk arm64).
+# - composer.phar 2.11.3 (sha256 resmi getcomposer.org) dan cacert.pem
+#   Mozilla (curl.se) diunduh di job android sebagai aset APK.
 # - Belum ada job release APK: signing belum dikonfigurasi.
 
 name: WebForge Mobile CI
@@ -95,23 +99,32 @@ jobs:
         run: npm run build
 
   build-php:
-    name: PHP 8.3 (Android arm64)
+    name: PHP ${{ matrix.php_series }} CLI+FPM (Android arm64)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - php_series: "8.2"
+            php_version: "8.2.36"
+            suffix: "82"
+          - php_series: "8.3"
+            php_version: "8.3.37"
+            suffix: "83"
+          - php_series: "8.4"
+            php_version: "8.4.28"
+            suffix: "84"
     env:
-      PHP_VERSION: "8.3.14"
-      LIBXML2_VERSION: "2.12.9"
-      OPENSSL_VERSION: "3.3.2"
-      ONIGURUMA_VERSION: "6.9.9"
-      SQLITE_VERSION: "3.46.1"
-      SQLITE_AMALGAMATION: "3460100"
-      LIBZIP_VERSION: "1.10.1"
+      PHP_VERSION: ${{ matrix.php_version }}
+      PHP_SERIES: ${{ matrix.php_series }}
       ANDROID_API: "26"
-      PREFIX: ${{ github.workspace }}/php-prefix
+      OUTPUT_DIR: ${{ github.workspace }}/php-out
+      WORK_DIR: ${{ github.workspace }}/php-work/${{ matrix.suffix }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Locate Android NDK & setup toolchain
+      - name: Locate Android NDK
         run: |
           if [ -z "$ANDROID_NDK_HOME" ]; then
             NDK_DIR=$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)
@@ -121,257 +134,44 @@ jobs:
             fi
             echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
           fi
-          NDK="${ANDROID_NDK_HOME:-$NDK_DIR}"
-          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
-          # Wrapper clang NDK adalah skrip yang mencari clang relatif
-          # terhadap lokasinya sendiri, jadi symlink ke direktori lain
-          # rusak. Pakai path absolut wrapper aslinya langsung.
-          echo "$TOOLCHAIN/bin" >> "$GITHUB_PATH"
-          {
-            echo "CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang"
-            echo "CXX=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang++"
-            echo "AR=llvm-ar"
-            echo "RANLIB=llvm-ranlib"
-            echo "STRIP=llvm-strip"
-            echo "ANDROID_NDK_ROOT=$NDK"
-          } >> "$GITHUB_ENV"
-          "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang" --version
+          echo "NDK: ${ANDROID_NDK_HOME:-$NDK_DIR}"
 
-      - name: Cache PHP build
+      - name: Cache PHP ${{ matrix.php_series }} build
         id: php-cache
         uses: actions/cache@v4
         with:
           path: php-out
-          key: php-8.3.14-android26-arm64-bcmath-ctype-dom-fileinfo-filter-hash-json-mbstring-openssl-pdo-pdo_sqlite-phar-posix-session-simplexml-sockets-sqlite3-tokenizer-xml-xmlreader-xmlwriter-zip-zlib
+          key: php-${{ matrix.php_version }}-android26-arm64-${{ hashFiles('scripts/native/build-php.sh') }}-ext-bcmath-ctype-dom-fileinfo-filter-hash-json-libxml-mbstring-openssl-pdo-pdo_sqlite-phar-posix-session-simplexml-sockets-sqlite3-tokenizer-xml-xmlreader-xmlwriter-zip-zlib-curl-gd-exif-soap-ftp-pcntl-intl-fpm
 
-      - name: Build SQLite (amalgamation, static)
+      - name: Build PHP ${{ matrix.php_version }} (CLI + FPM)
         if: steps.php-cache.outputs.cache-hit != 'true'
+        run: bash scripts/native/build-php.sh
+
+      - name: Verify PHP ${{ matrix.php_series }} artifacts
         run: |
-          mkdir -p "$PREFIX/lib/pkgconfig" "$PREFIX/include" php-src
-          cd php-src
-          curl -fsSL -o sqlite.zip "https://www.sqlite.org/2024/sqlite-amalgamation-${SQLITE_AMALGAMATION}.zip"
-          unzip -q sqlite.zip
-          cd "sqlite-amalgamation-${SQLITE_AMALGAMATION}"
-          $CC -O2 -fPIC -DSQLITE_THREADSAFE=1 -DSQLITE_ENABLE_COLUMN_METADATA \
-            -DSQLITE_ENABLE_FTS4 -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_RTREE \
-            -c sqlite3.c -o sqlite3.o
-          $AR rcs "$PREFIX/lib/libsqlite3.a" sqlite3.o
-          cp sqlite3.h sqlite3ext.h "$PREFIX/include/"
-          cat > "$PREFIX/lib/pkgconfig/sqlite3.pc" <<EOF
-          prefix=$PREFIX
-          exec_prefix=\${prefix}
-          libdir=\${exec_prefix}/lib
-          includedir=\${prefix}/include
-
-          Name: SQLite
-          Description: SQL database engine
-          Version: $SQLITE_VERSION
-          Libs: -L\${libdir} -lsqlite3
-          Libs.private: -lm -ldl
-          Cflags: -I\${includedir}
-          EOF
-
-      - name: Build libxml2 (static, tanpa iconv)
-        if: steps.php-cache.outputs.cache-hit != 'true'
-        run: |
-          cd php-src
-          curl -fsSL -o libxml2.tar.xz "https://download.gnome.org/sources/libxml2/2.12/libxml2-${LIBXML2_VERSION}.tar.xz"
-          tar xf libxml2.tar.xz
-          cmake -S "libxml2-${LIBXML2_VERSION}" -B libxml2-build \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM="android-${ANDROID_API}" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DCMAKE_INSTALL_PREFIX="$PREFIX" \
-            -DLIBXML2_WITH_ICONV=OFF \
-            -DLIBXML2_WITH_PYTHON=OFF \
-            -DLIBXML2_WITH_LZMA=OFF \
-            -DLIBXML2_WITH_ZLIB=ON \
-            -DLIBXML2_WITH_THREADS=ON \
-            -DLIBXML2_WITH_HTTP=OFF \
-            -DLIBXML2_WITH_FTP=OFF \
-            -DLIBXML2_WITH_TESTS=OFF
-          cmake --build libxml2-build -j"$(nproc)"
-          cmake --install libxml2-build
-          if [ ! -f "$PREFIX/lib/pkgconfig/libxml-2.0.pc" ]; then
-            echo "libxml-2.0.pc tidak terinstall; menulis pkgconfig manual"
-            mkdir -p "$PREFIX/lib/pkgconfig"
-            cat > "$PREFIX/lib/pkgconfig/libxml-2.0.pc" <<EOF
-          prefix=$PREFIX
-          exec_prefix=\${prefix}
-          libdir=\${exec_prefix}/lib
-          includedir=\${prefix}/include
-
-          Name: libXML
-          Description: libXML library version2.
-          Version: $LIBXML2_VERSION
-          Libs: -L\${libdir} -lxml2
-          Libs.private: -lz -lm -ldl
-          Cflags: -I\${includedir}/libxml2
-          EOF
-          fi
-
-      - name: Build OpenSSL (static)
-        if: steps.php-cache.outputs.cache-hit != 'true'
-        run: |
-          cd php-src
-          curl -fsSL -o openssl.tar.gz "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
-          tar xf openssl.tar.gz
-          cd "openssl-${OPENSSL_VERSION}"
-          ./Configure android-arm64 "-D__ANDROID_API__=${ANDROID_API}" \
-            no-shared no-tests no-docs \
-            --prefix="$PREFIX" --openssldir="$PREFIX/ssl"
-          make -j"$(nproc)" build_sw
-          make install_sw
-
-      - name: Build Oniguruma (static)
-        if: steps.php-cache.outputs.cache-hit != 'true'
-        run: |
-          cd php-src
-          curl -fsSL -o onig.tar.gz "https://github.com/kkos/oniguruma/releases/download/v${ONIGURUMA_VERSION}/onig-${ONIGURUMA_VERSION}.tar.gz"
-          tar xf onig.tar.gz
-          cd "onig-${ONIGURUMA_VERSION}"
-          ./configure --host=aarch64-linux-android --prefix="$PREFIX" \
-            --enable-static --disable-shared CC="$CC" AR="$AR" RANLIB="$RANLIB"
-          make -j"$(nproc)"
-          make install
-
-      - name: Build libzip (static)
-        if: steps.php-cache.outputs.cache-hit != 'true'
-        run: |
-          cd php-src
-          curl -fsSL -o libzip.tar.gz "https://libzip.org/download/libzip-${LIBZIP_VERSION}.tar.gz"
-          tar xf libzip.tar.gz
-          cmake -S "libzip-${LIBZIP_VERSION}" -B libzip-build \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM="android-${ANDROID_API}" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DCMAKE_INSTALL_PREFIX="$PREFIX" \
-            -DENABLE_COMMONCRYPTO=OFF \
-            -DENABLE_GNUTLS=OFF \
-            -DENABLE_OPENSSL=OFF \
-            -DENABLE_MBEDTLS=OFF \
-            -DENABLE_BZIP2=OFF \
-            -DENABLE_LZMA=OFF \
-            -DENABLE_ZSTD=OFF \
-            -DBUILD_TOOLS=OFF \
-            -DBUILD_REGRESS=OFF \
-            -DBUILD_EXAMPLES=OFF \
-            -DBUILD_DOC=OFF
-          cmake --build libzip-build -j"$(nproc)"
-          cmake --install libzip-build
-
-      - name: Build zlib (static)
-        if: steps.php-cache.outputs.cache-hit != 'true'
-        run: |
-          # PHP configure mencari zlib lewat pkg-config; sysroot NDK
-          # tidak menyediakan zlib.pc, jadi bangun zlib statis sendiri.
-          curl -fsSL -o zlib.tar.gz "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz"
-          tar xf zlib.tar.gz
-          cd zlib-1.3.1
-          CC="$CC" AR="$AR" RANLIB="$RANLIB" ./configure --prefix="$PREFIX" --static
-          make -j"$(nproc)"
-          make install
-
-      - name: Build PHP CLI
-        if: steps.php-cache.outputs.cache-hit != 'true'
-        run: |
-          cd php-src
-          curl -fsSL -o php.tar.gz "https://www.php.net/distributions/php-${PHP_VERSION}.tar.gz"
-          tar xf php.tar.gz
-          cd "php-${PHP_VERSION}"
-          export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig"
-          export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig"
-          export PKG_CONFIG="pkg-config --static"
-          export CFLAGS="-O2 -fPIC"
-          export CPPFLAGS="-I$PREFIX/include"
-          export LDFLAGS="-L$PREFIX/lib"
-          ./configure \
-            --host=aarch64-linux-android \
-            --build=x86_64-linux-gnu \
-            --prefix="$PREFIX" \
-            --with-config-file-path="$PREFIX/etc" \
-            --disable-all \
-            --disable-cgi \
-            --disable-phpdbg \
-            --without-pear \
-            --enable-bcmath \
-            --enable-ctype \
-            --with-libxml \
-            --enable-dom \
-            --enable-fileinfo \
-            --enable-filter \
-            --enable-mbstring \
-            --with-openssl \
-            --enable-pdo \
-            --with-pdo-sqlite \
-            --enable-phar \
-            --enable-posix \
-            --enable-session \
-            --enable-simplexml \
-            --enable-sockets \
-            --with-sqlite3 \
-            --enable-tokenizer \
-            --enable-xml \
-            --enable-xmlreader \
-            --enable-xmlwriter \
-            --with-zip \
-            --with-zlib \
-            CC="$CC" CXX="$CXX" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP"
-          # Bionic: configure mendeteksi simbol res_n* ada, tetapi
-          # struct __res_state tidak utuh untuk aplikasi sehingga
-          # ext/standard/dns.c gagal kompilasi. Matikan deteksi itu
-          # di php_config.h; fungsi DNS PHP memakai jalur fallback.
-          for sym in HAVE_RES_NINIT HAVE_RES_NSEARCH HAVE_RES_NCLOSE HAVE_RES_SEARCH HAVE_RES_INIT HAVE_DN_SKIPNAME HAVE_DN_EXPAND HAVE_GETDTABLESIZE; do
-            sed -i "s/^#define $sym 1$/\/* #undef $sym *\//" main/php_config.h
+          for f in "php-out/libphp${{ matrix.suffix }}.so" "php-out/libphpfpm${{ matrix.suffix }}.so" "php-out/icudt74l.dat"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::Artifact PHP tidak ditemukan: $f"
+              exit 1
+            fi
+            ls -lh "$f"
           done
-          grep -E "HAVE_RES_|HAVE_DN_" main/php_config.h || true
-          # Bionic tidak mendeklarasikan getdtablesize(); PHP memanggilnya
-          # tanpa guard di php_fopen_wrapper.c. Ganti dengan sysconf yang
-          # setara (unistd.h sudah di-include file-file tersebut).
-          grep -rl "getdtablesize()" ext main sapi | xargs sed -i 's/getdtablesize()/sysconf(_SC_OPEN_MAX)/g'
-          make -j"$(nproc)"
-
-      - name: Package libphp.so
-        if: steps.php-cache.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p php-out
-          cp "php-src/php-${PHP_VERSION}/sapi/cli/php" php-out/libphp.so
-          $STRIP php-out/libphp.so
-          ls -lh php-out/libphp.so
-
-      - name: Verify PHP ELF (ARM64, dependensi bionic saja)
-        run: |
-          SO=php-out/libphp.so
-          if [ ! -f "$SO" ]; then
-            echo "::error::libphp.so tidak ditemukan: $SO"
-            exit 1
-          fi
-          file "$SO"
-          readelf -h "$SO" | grep -E "Class|Type|Machine"
-          if ! readelf -h "$SO" | grep -q "AArch64"; then
-            echo "::error::libphp.so bukan ELF AArch64"
-            exit 1
-          fi
-          readelf -d "$SO" | grep NEEDED || true
-          for lib in $(readelf -d "$SO" | grep NEEDED | sed -E 's/.*\[(.*)\]/\1/'); do
-            case "$lib" in
-              libc.so|libm.so|libdl.so|libz.so|liblog.so) ;;
-              *)
-                echo "::error::Dependensi dinamis tak terduga pada libphp.so: $lib"
-                exit 1
-                ;;
-            esac
+          for so in "php-out/libphp${{ matrix.suffix }}.so" "php-out/libphpfpm${{ matrix.suffix }}.so"; do
+            file "$so"
+            if ! readelf -h "$so" | grep -q "AArch64"; then
+              echo "::error::$so bukan ELF AArch64"
+              exit 1
+            fi
           done
 
-      - name: Upload PHP binary
+      - name: Upload PHP ${{ matrix.php_series }} binaries
         uses: actions/upload-artifact@v4
         with:
-          name: php-android-arm64
-          path: php-out/libphp.so
+          name: php${{ matrix.suffix }}-android-arm64
+          path: |
+            php-out/libphp${{ matrix.suffix }}.so
+            php-out/libphpfpm${{ matrix.suffix }}.so
+            php-out/icudt74l.dat
           if-no-files-found: error
 
   build-caddy:
@@ -670,9 +470,93 @@ jobs:
             mariadb-out/mariadb-version.txt
           if-no-files-found: error
 
+  build-sendmail:
+    name: Sendmail shim (Android arm64)
+    runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Rust (stable) + target Android
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Cargo (sendmail-shim)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            sendmail-shim/target/
+          key: ${{ runner.os }}-cargo-sendmail-${{ hashFiles('sendmail-shim/Cargo.toml', 'sendmail-shim/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sendmail-
+
+      - name: Install cargo-ndk
+        run: command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
+
+      - name: Locate Android NDK
+        run: |
+          if [ -z "$ANDROID_NDK_HOME" ]; then
+            NDK_DIR=$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)
+            if [ -z "$NDK_DIR" ]; then
+              echo "::error::Android NDK tidak ditemukan di $ANDROID_HOME/ndk"
+              exit 1
+            fi
+            echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          fi
+          echo "NDK: ${ANDROID_NDK_HOME:-$NDK_DIR}"
+
+      - name: Build sendmail shim (arm64-v8a)
+        run: |
+          cargo ndk -t arm64-v8a build --release \
+            --manifest-path sendmail-shim/Cargo.toml \
+            --bin webforge-sendmail
+          BIN=sendmail-shim/target/aarch64-linux-android/release/webforge-sendmail
+          if [ ! -f "$BIN" ]; then
+            echo "::error::Binary webforge-sendmail tidak ditemukan: $BIN"
+            exit 1
+          fi
+          mkdir -p sendmail-out
+          cp "$BIN" sendmail-out/libsendmail.so
+          TOOLCHAIN=$(ls -d "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/* | head -1)
+          "$TOOLCHAIN/bin/llvm-strip" sendmail-out/libsendmail.so
+          chmod +x sendmail-out/libsendmail.so
+          ls -lh sendmail-out/libsendmail.so
+
+      - name: Verify sendmail shim ELF
+        run: |
+          SO=sendmail-out/libsendmail.so
+          file "$SO"
+          if ! readelf -h "$SO" | grep -q "AArch64"; then
+            echo "::error::libsendmail.so bukan ELF AArch64"
+            exit 1
+          fi
+          readelf -d "$SO" | grep NEEDED || true
+          for lib in $(readelf -d "$SO" | grep NEEDED | sed -E 's/.*\[(.*)\]/\1/'); do
+            case "$lib" in
+              libc.so|libm.so|libdl.so|libz.so|liblog.so) ;;
+              *)
+                echo "::error::Dependensi dinamis tak terduga pada libsendmail.so: $lib"
+                exit 1
+                ;;
+            esac
+          done
+
+      - name: Upload sendmail shim
+        uses: actions/upload-artifact@v4
+        with:
+          name: sendmail-android-arm64
+          path: sendmail-out/libsendmail.so
+          if-no-files-found: error
+
   android:
     name: Android APK (debug)
-    needs: [core, frontend, build-php, build-caddy, build-nginx, build-apache, build-python, build-node, build-postgres, build-mariadb]
+    needs: [core, frontend, build-php, build-sendmail, build-caddy, build-nginx, build-apache, build-python, build-node, build-postgres, build-mariadb]
     runs-on: ubuntu-latest
     env:
       CARGO_BUILD_JOBS: 2
@@ -741,26 +625,6 @@ jobs:
           fi
           ls -lh "$SO"
 
-      - name: Download PHP binary (libphp.so)
-        uses: actions/download-artifact@v4
-        with:
-          name: php-android-arm64
-          path: android/app/src/main/jniLibs/arm64-v8a
-
-      - name: Verify PHP native library
-        run: |
-          SO=android/app/src/main/jniLibs/arm64-v8a/libphp.so
-          if [ ! -f "$SO" ]; then
-            echo "::error::libphp.so tidak ditemukan: $SO"
-            exit 1
-          fi
-          file "$SO"
-          if ! readelf -h "$SO" | grep -q "AArch64"; then
-            echo "::error::libphp.so bukan ELF AArch64"
-            exit 1
-          fi
-          ls -lh "$SO"
-
       - name: Install root dependencies (Capacitor)
         run: npm ci
 
@@ -788,7 +652,7 @@ jobs:
           JNILIBS=android/app/src/main/jniLibs/arm64-v8a
           ASSETS=android/app/src/main/assets
           mkdir -p "$JNILIBS" "$ASSETS"
-          for so in libcaddy.so libnginx.so libhttpd.so libpython.so libnode.so libwebforge_node.so libc++_shared.so libpostgres.so libinitdb.so libpgctl.so libmariadbd.so; do
+          for so in libphp82.so libphp83.so libphp84.so libphpfpm82.so libphpfpm83.so libphpfpm84.so libsendmail.so libcaddy.so libnginx.so libhttpd.so libpython.so libnode.so libwebforge_node.so libc++_shared.so libpostgres.so libinitdb.so libpgctl.so libmariadbd.so; do
             SRC=$(find runtime-artifacts -name "$so" | head -1)
             if [ -z "$SRC" ]; then
               echo "::error::$so tidak ditemukan di artifact runtime"
@@ -813,6 +677,57 @@ jobs:
             cp "$SRC" "$ASSETS/$asset"
             ls -lh "$ASSETS/$asset"
           done
+          # icudt74l.dat ada di ketiga artifact PHP (ICU sama); pastikan
+          # isinya identik lalu salin satu salinan sebagai aset.
+          ICUDT_COUNT=$(find runtime-artifacts -name "icudt74l.dat" | wc -l)
+          if [ "$ICUDT_COUNT" -lt 1 ]; then
+            echo "::error::icudt74l.dat tidak ditemukan di artifact PHP"
+            exit 1
+          fi
+          ICUDT_HASHES=$(find runtime-artifacts -name "icudt74l.dat" -exec sha256sum {} + | awk '{print $1}' | sort -u | wc -l)
+          if [ "$ICUDT_HASHES" -ne 1 ]; then
+            echo "::error::icudt74l.dat antar artifact PHP tidak identik ($ICUDT_HASHES hash berbeda)"
+            exit 1
+          fi
+          SRC=$(find runtime-artifacts -name "icudt74l.dat" | head -1)
+          cp "$SRC" "$ASSETS/icudt74l.dat"
+          ls -lh "$ASSETS/icudt74l.dat"
+
+      - name: Download Composer 2.11.3 (sha256 resmi)
+        run: |
+          ASSETS=android/app/src/main/assets
+          mkdir -p "$ASSETS" composer-dl
+          curl -fsSL --retry 3 -o composer-dl/composer.phar "https://getcomposer.org/download/2.11.3/composer.phar"
+          curl -fsSL --retry 3 -o composer-dl/composer.phar.sha256sum "https://getcomposer.org/download/2.11.3/composer.phar.sha256sum"
+          EXPECTED=$(awk '{print $1}' composer-dl/composer.phar.sha256sum)
+          ACTUAL=$(sha256sum composer-dl/composer.phar | awk '{print $1}')
+          if [ -z "$EXPECTED" ] || [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::sha256 composer.phar tidak cocok: resmi=$EXPECTED aktual=$ACTUAL"
+            exit 1
+          fi
+          SIZE=$(stat -c%s composer-dl/composer.phar)
+          if [ "$SIZE" -le 1000000 ]; then
+            echo "::error::composer.phar terlalu kecil ($SIZE bytes), diduga unduhan rusak"
+            exit 1
+          fi
+          cp composer-dl/composer.phar "$ASSETS/composer.phar"
+          echo "Composer 2.11.3 terverifikasi sha256=$ACTUAL ($SIZE bytes)"
+
+      - name: Download cacert.pem (Mozilla via curl.se)
+        run: |
+          ASSETS=android/app/src/main/assets
+          mkdir -p "$ASSETS"
+          curl -fsSL --retry 3 -o "$ASSETS/cacert.pem" "https://curl.se/ca/cacert.pem"
+          SIZE=$(stat -c%s "$ASSETS/cacert.pem")
+          if [ "$SIZE" -le 100000 ]; then
+            echo "::error::cacert.pem terlalu kecil ($SIZE bytes), diduga unduhan rusak"
+            exit 1
+          fi
+          if ! grep -q "BEGIN CERTIFICATE" "$ASSETS/cacert.pem"; then
+            echo "::error::cacert.pem tidak berisi sertifikat PEM"
+            exit 1
+          fi
+          ls -lh "$ASSETS/cacert.pem"
 
       - name: Build debug APK
         working-directory: android
@@ -833,13 +748,17 @@ jobs:
             echo "::error::APK terlalu kecil ($SIZE bytes), diduga build rusak"
             exit 1
           fi
-          for entry in AndroidManifest.xml classes.dex lib/arm64-v8a/libwebforge_core.so lib/arm64-v8a/libphp.so lib/arm64-v8a/libcaddy.so lib/arm64-v8a/libnginx.so lib/arm64-v8a/libhttpd.so lib/arm64-v8a/libpython.so lib/arm64-v8a/libnode.so lib/arm64-v8a/libwebforge_node.so lib/arm64-v8a/libc++_shared.so lib/arm64-v8a/libpostgres.so lib/arm64-v8a/libinitdb.so lib/arm64-v8a/libpgctl.so lib/arm64-v8a/libmariadbd.so assets/python-stdlib.zip assets/python-version.txt assets/node-version.txt assets/npm.zip assets/postgres-share.zip assets/mariadb-share.zip; do
+          for entry in AndroidManifest.xml classes.dex lib/arm64-v8a/libwebforge_core.so lib/arm64-v8a/libphp82.so lib/arm64-v8a/libphp83.so lib/arm64-v8a/libphp84.so lib/arm64-v8a/libphpfpm82.so lib/arm64-v8a/libphpfpm83.so lib/arm64-v8a/libphpfpm84.so lib/arm64-v8a/libsendmail.so lib/arm64-v8a/libcaddy.so lib/arm64-v8a/libnginx.so lib/arm64-v8a/libhttpd.so lib/arm64-v8a/libpython.so lib/arm64-v8a/libnode.so lib/arm64-v8a/libwebforge_node.so lib/arm64-v8a/libc++_shared.so lib/arm64-v8a/libpostgres.so lib/arm64-v8a/libinitdb.so lib/arm64-v8a/libpgctl.so lib/arm64-v8a/libmariadbd.so assets/python-stdlib.zip assets/python-version.txt assets/node-version.txt assets/npm.zip assets/postgres-share.zip assets/mariadb-share.zip assets/composer.phar assets/cacert.pem assets/icudt74l.dat; do
             if ! unzip -l "$APK" | grep -q "$entry"; then
               echo "::error::APK tidak berisi $entry"
               exit 1
             fi
             echo "OK: $entry"
           done
+          if unzip -l "$APK" | grep -q "lib/arm64-v8a/libphp\.so"; then
+            echo "::error::APK masih berisi libphp.so lama (harus libphp82/83/84.so)"
+            exit 1
+          fi
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4

@@ -1,6 +1,6 @@
 [package]
 name = "webforge-core"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 
 [lib]
@@ -27,6 +27,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
 futures-util = "0.3"
+# Dependensi SFTP (worker C, v0.5.0): server SFTP russh + hashing
+# password argon2. Disiapkan di sini agar Cargo.lock konsisten.
+russh = "0.54"
+russh-sftp = "2"
+argon2 = "0.5"
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"

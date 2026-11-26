@@ -5,10 +5,86 @@
 :root {
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  /* Tema glassmorphism biru laut (terang): kaca biru muda, teks gelap terbaca. */
+  --wf-bg: #e8f6fd;
+  --wf-surface: rgba(255, 255, 255, 0.72);
+  --wf-surface-strong: rgba(255, 255, 255, 0.88);
+  --wf-border: rgba(2, 132, 199, 0.35);
+  --wf-text: #0a2438;
+  --wf-muted: #33566e;
+  --wf-accent: #0284c7;
+  --wf-accent-2: #06b6d4;
+  --wf-glow: rgba(34, 211, 238, 0.22);
+  --wf-grid: rgba(2, 132, 199, 0.08);
+  --wf-shadow: rgba(3, 105, 161, 0.14);
+}
+
+.dark {
+  /* Tema utama: gelap kebiruan cybersecurity dengan aksen cyan. */
+  --wf-bg: #04121f;
+  --wf-surface: rgba(8, 32, 54, 0.62);
+  --wf-surface-strong: rgba(10, 42, 68, 0.82);
+  --wf-border: rgba(56, 189, 248, 0.38);
+  --wf-text: #e6f4ff;
+  --wf-muted: #a9c9de;
+  --wf-accent: #38bdf8;
+  --wf-accent-2: #22d3ee;
+  --wf-glow: rgba(34, 211, 238, 0.16);
+  --wf-grid: rgba(56, 189, 248, 0.07);
+  --wf-shadow: rgba(0, 0, 0, 0.35);
 }
 
 html, body, #root { height: 100%; }
 body { margin: 0; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+
+/* Latar aplikasi: gradasi biru laut + grid halus + glow cyan. */
+.wf-app {
+  color: var(--wf-text);
+  background-color: var(--wf-bg);
+  background-image:
+    radial-gradient(ellipse 90% 55% at 85% -10%, var(--wf-glow), transparent 60%),
+    radial-gradient(ellipse 70% 45% at -10% 105%, var(--wf-glow), transparent 55%),
+    linear-gradient(var(--wf-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--wf-grid) 1px, transparent 1px),
+    linear-gradient(160deg, var(--wf-bg), var(--wf-bg));
+  background-size: auto, auto, 28px 28px, 28px 28px, auto;
+  background-attachment: fixed;
+}
+
+/* Panel kaca: semi-transparan, blur, border tipis terang. */
+.wf-glass-card {
+  background: var(--wf-surface);
+  border: 1px solid var(--wf-border);
+  backdrop-filter: blur(14px) saturate(145%);
+  -webkit-backdrop-filter: blur(14px) saturate(145%);
+  box-shadow: 0 10px 28px var(--wf-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+.wf-glass-panel {
+  background: var(--wf-surface);
+  border: 1px solid var(--wf-border);
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
+}
+
+.wf-header {
+  background: linear-gradient(120deg, rgba(3, 60, 99, 0.94), rgba(3, 105, 161, 0.92) 55%, rgba(8, 145, 178, 0.9));
+  border-bottom: 1px solid rgba(103, 232, 249, 0.45);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  box-shadow: 0 8px 24px rgba(2, 32, 54, 0.35);
+}
+.wf-drawer {
+  background: var(--wf-surface-strong);
+  border-right: 1px solid var(--wf-border);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+}
+.wf-bottom-nav {
+  background: var(--wf-surface-strong);
+  border-top: 1px solid var(--wf-border);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+}
 
 .app-header { padding-top: calc(var(--safe-top) + 0.5rem); }
 .bottom-nav { padding-bottom: var(--safe-bottom); }
@@ -17,7 +93,7 @@ body { margin: 0; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, san
 .cm-editor { height: 100%; font-size: 13px; }
 .cm-editor .cm-scroller { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
-/* Skeleton loading: kilau halus yang menyapu blok abu-abu. */
+/* Skeleton loading: kilau halus yang menyapu blok kaca. */
 .skeleton-shimmer { position: relative; overflow: hidden; }
 .skeleton-shimmer::after {
   content: '';

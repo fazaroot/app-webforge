@@ -12,6 +12,8 @@ vi.mock('../lib/api', () => ({
     scanProject: vi.fn(),
     deleteProject: vi.fn(),
     project: vi.fn(),
+    phpInfo: vi.fn(),
+    putProjectPhpVersion: vi.fn(),
   },
   isNativeWebForge: vi.fn(() => false),
   pickDirectory: vi.fn(),

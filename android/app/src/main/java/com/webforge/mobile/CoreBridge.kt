@@ -57,7 +57,10 @@ object CoreBridge {
         "python-version.txt",
         "postgres-share.zip",
         "mariadb-share.zip",
-        "npm.zip"
+        "npm.zip",
+        "composer.phar",
+        "cacert.pem",
+        "icudt74l.dat"
     )
 
     private val startupLogLock = Any()

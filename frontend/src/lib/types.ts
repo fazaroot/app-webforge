@@ -3,12 +3,12 @@ export interface RuntimeInfo { id: string; name: string; available: boolean; ver
 export interface SystemInfo { version: string; os: string; arch: string; data_dir: string; workspace_dir: string; management_port: number; started_at: string; runtimes: RuntimeInfo[] }
 export interface DiagnosticCheck { name: string; status: 'ok' | 'warn' | 'error'; detail: string }
 export interface Diagnostics { generated_at: string; checks: DiagnosticCheck[]; runtimes: RuntimeInfo[]; ports: unknown[]; storage: Record<string, unknown> }
-export interface FrameworkInfo { framework: string; language: string; version: string | null; recommended_runtime: string; recommended_document_root: string; readiness: string; notes: string[]; detected_files: string[] }
-export interface Project { id: string; name: string; slug: string; path: string; document_root: string; created_at: string; updated_at: string; framework: FrameworkInfo | null }
+export interface FrameworkInfo { framework: string; language: string; version: string | null; recommended_runtime: string; recommended_document_root: string; readiness: string; notes: string[]; detected_files: string[]; php_version_constraint?: string | null; recommended_php_version?: string | null }
+export interface Project { id: string; name: string; slug: string; path: string; document_root: string; created_at: string; updated_at: string; framework: FrameworkInfo | null; php_version?: string | null }
 export type ServerEngine = 'static' | 'php' | 'caddy' | 'nginx' | 'apache' | 'python' | 'node';
-export interface ServerInstance { id: string; project_id: string; project_name: string; engine: string; port: number; bind_lan: boolean; document_root: string; status: 'stopped' | 'starting' | 'running' | 'degraded' | 'stopping' | 'error'; pid: number | null; started_at: string | null; uptime_seconds: number; url_local: string; url_lan: string | null; error_message: string | null; in_process?: boolean; config_text: string | null; proxy_port: number | null; command: string | null; backend_port?: number | null; warning_message?: string | null; last_health_at?: string | null; last_health_status?: number | null; last_health_error?: string | null; last_health_target?: string | null; health_failures?: number; auto_restart_count?: number }
+export interface ServerInstance { id: string; project_id: string; project_name: string; engine: string; port: number; bind_lan: boolean; document_root: string; status: 'stopped' | 'starting' | 'running' | 'degraded' | 'stopping' | 'error'; pid: number | null; started_at: string | null; uptime_seconds: number; url_local: string; url_lan: string | null; error_message: string | null; in_process?: boolean; config_text: string | null; proxy_port: number | null; command: string | null; backend_port?: number | null; warning_message?: string | null; last_health_at?: string | null; last_health_status?: number | null; last_health_error?: string | null; last_health_target?: string | null; health_failures?: number; auto_restart_count?: number; php_version?: string | null; backend_kind?: 'php-fpm' | 'proxy' | null }
 export interface LanTestResult { ok: boolean; url: string | null; host: string | null; port: number; status_code: number | null; duration_ms: number; target: string | null; error: string | null; warning: string | null }
-export interface CreateServerBody { project_id: string; engine: string; port: number; bind_lan: boolean; document_root?: string; proxy_port?: number | null; command?: string | null }
+export interface CreateServerBody { project_id: string; engine: string; port: number; bind_lan: boolean; document_root?: string; proxy_port?: number | null; command?: string | null; php_version?: string | null }
 export interface ServerConfig { engine: string; config_text: string; generated_config: string; config_path: string; editable: boolean }
 export interface ValidateConfigResult { valid: boolean; output: string }
 export interface ServerLog { id: string; level: string; message: string; created_at: string }
@@ -32,7 +32,20 @@ export interface LogEntry { id: string; category: string; severity: string; mess
 export interface GitStatus { available: boolean; reason: string | null; branch: string | null; clean: boolean; entries: string[] }
 export interface SecurityStatus { api_token_set: boolean; management_bind: string; lan_servers: number; warnings: string[] }
 export type SettingsMap = Record<string, unknown>;
-export interface PhpRuntimeInfo { available: boolean; version: string | null; extensions: string[]; binary_path: string | null; error: string | null }
+export interface PhpVersionInfo { version: string; patch_version: string | null; available: boolean; fpm_available: boolean; extensions: string[]; binary_path: string | null; fpm_binary_path: string | null; error: string | null }
+export interface ComposerRuntimeInfo { available: boolean; version: string | null; path: string | null; error: string | null }
+export interface PhpRuntimeInfo { available: boolean; version: string | null; extensions: string[]; binary_path: string | null; error: string | null; selected_version?: string | null; versions?: PhpVersionInfo[]; composer?: ComposerRuntimeInfo }
+export interface ComposerProjectInfo { available: boolean; version: string | null; has_composer_json: boolean; has_lock: boolean; vendor_present: boolean; php_version: string | null; recommended_php_version: string | null; error: string | null }
+export interface ComposerRunBody { action: 'install' | 'update' | 'require'; package?: string; php_version?: string | null }
+export interface ComposerRunResult { exit_code: number | null; stdout: string; stderr: string; timed_out: boolean; duration_ms: number }
+export type MailSecurity = 'none' | 'starttls' | 'tls';
+export interface MailSettings { configured: boolean; host: string; port: number; security: MailSecurity; username: string; from: string; has_password: boolean }
+export interface MailSettingsBody { host: string; port: number; security: MailSecurity; username: string; from: string; password?: string; clear_password?: boolean }
+export interface MailTestResult { ok: boolean; error: string | null; output: string; duration_ms: number }
+export interface SftpConnection { id: string; username: string; remote: string; connected_at: string; last_activity: string }
+export interface SftpStatus { running: boolean; bind_lan: boolean; port: number; username: string; host_key_fingerprint: string | null; root: string; started_at: string | null; last_error: string | null; connections: SftpConnection[] }
+export interface SftpSettingsBody { username: string; password?: string; port: number; bind_lan: boolean }
+export interface SftpResetPasswordResult { password: string }
 export interface PhpSettings { memory_limit: string; upload_max_filesize: string; post_max_size: string; max_execution_time: number; date_timezone: string; display_errors: boolean }
 export interface PhpCliResult { exit_code: number | null; stdout: string; stderr: string; timed_out: boolean }
 export interface PythonRuntimeInfo { available: boolean; version: string | null; executable: string | null; error: string | null; pip_available: boolean }

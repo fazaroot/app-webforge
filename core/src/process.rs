@@ -22,6 +22,21 @@ pub struct ServerRow {
     pub backend_port: Option<i64>,
     pub health_failures: i64,
     pub auto_restart_count: i64,
+    /// Pilihan versi PHP server ini (None = warisi proyek).
+    pub php_version: Option<String>,
+    /// Pilihan versi PHP proyek induk (None = aturan default).
+    pub project_php_version: Option<String>,
+}
+
+impl ServerRow {
+    /// Versi PHP efektif: pilihan server menang, lalu proyek, lalu
+    /// aturan default di php::resolve_php. Rekomendasi framework tidak
+    /// pernah menimpa pilihan ini diam-diam.
+    pub fn effective_php_version(&self) -> Option<&str> {
+        self.php_version
+            .as_deref()
+            .or(self.project_php_version.as_deref())
+    }
 }
 
 /// Spesifikasi proses anak yang bisa diluncurkan ulang oleh watcher
@@ -147,10 +162,35 @@ fn loopback_target(port: u16) -> ProbeTarget {
     probe_target_with_lan(false, port, None)
 }
 
-/// Hasil satu probe HTTP nyata. `ok` berarti server menjawab HTTP dengan
-/// status <500; status 403/404 tetap `ok` sebagai bukti proses menjawab,
-/// tetapi pemanggil wajib menurunkannya menjadi peringatan docroot bila
-/// akar situs tidak bisa dilayani (lihat `probe_warning`).
+/// Klasifikasi hasil probe untuk supervisi kesehatan:
+/// - `Alive`: respons HTTP apa pun <500. Server terbukti hidup;
+///   403/404 adalah peringatan docroot, bukan kegagalan, dan tidak
+///   pernah memicu restart.
+/// - `ServerError`: respons HTTP 5xx. Kegagalan yang boleh memicu
+///   degraded/restart bila beruntun.
+/// - `TransportFailure`: timeout/refused/reset/tanpa respons HTTP.
+///   Kegagalan yang boleh memicu degraded/restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeClass {
+    Alive,
+    ServerError,
+    TransportFailure,
+}
+
+impl ProbeClass {
+    pub fn is_alive(self) -> bool {
+        self == ProbeClass::Alive
+    }
+    pub fn is_failure(self) -> bool {
+        !self.is_alive()
+    }
+}
+
+/// Hasil satu probe HTTP nyata. `ok` berarti klasifikasi `Alive`
+/// (server menjawab HTTP dengan status <500); status 403/404 tetap
+/// `ok` sebagai bukti proses menjawab, tetapi pemanggil wajib
+/// menurunkannya menjadi peringatan docroot bila akar situs tidak
+/// bisa dilayani (lihat `probe_warning`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpProbe {
     pub ok: bool,
@@ -159,6 +199,16 @@ pub struct HttpProbe {
     pub duration_ms: u64,
     pub target: String,
     pub error: Option<String>,
+}
+
+impl HttpProbe {
+    pub fn class(&self) -> ProbeClass {
+        match self.status_code {
+            Some(code) if code < 500 => ProbeClass::Alive,
+            Some(_) => ProbeClass::ServerError,
+            None => ProbeClass::TransportFailure,
+        }
+    }
 }
 
 impl HttpProbe {
@@ -299,7 +349,9 @@ pub async fn health_check(port: u16) -> bool {
 async fn wait_probe_healthy(target: &ProbeTarget, timeout: Duration) -> HttpProbe {
     let deadline = tokio::time::Instant::now() + timeout;
     let mut last = probe_http_target(target, Duration::from_millis(1600)).await;
-    while !last.ok && tokio::time::Instant::now() < deadline {
+    // Alive (termasuk 403/404) menghentikan penantian: server terbukti
+    // menjawab. Hanya 5xx dan kegagalan transport yang ditunggu.
+    while last.class().is_failure() && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(200)).await;
         last = probe_http_target(target, Duration::from_millis(1600)).await;
     }
@@ -351,14 +403,14 @@ pub(crate) fn docroot_warning(
                 return None;
             }
             if doc_root.join("index.php").is_file() || is_php_project(project_path, doc_root) {
-                if engine == "apache" {
+                if engine == "static" {
                     Some(
-                        "Apache+PHP tidak tersedia di WebForge (mod_proxy/PHP handler tidak dibundel); index.php tidak dieksekusi. Gunakan engine PHP, Nginx, atau Caddy"
+                        "Server static tidak mengeksekusi PHP; index.php tidak akan berjalan. Gunakan engine PHP atau server komposit Nginx/Caddy/Apache dengan PHP-FPM"
                             .to_string(),
                     )
                 } else {
                     Some(
-                        "Docroot tidak memiliki index.html; proyek PHP butuh engine PHP atau mode proxy Nginx/Caddy agar index.php dieksekusi"
+                        "Docroot tidak memiliki index.html; proyek PHP butuh engine PHP atau mode komposit PHP-FPM (Nginx/Caddy/Apache) agar index.php dieksekusi"
                             .to_string(),
                     )
                 }
@@ -406,14 +458,16 @@ pub(crate) struct HealthTransition {
 /// Mesin transisi supervisi kesehatan (murni, untuk test): satu kegagalan
 /// belum mengubah status, dua kegagalan beruntun menjadi degraded, tiga
 /// memicu restart (maks 3), dan setelah anggaran restart habis menjadi
-/// error. Probe sehat selalu memulihkan ke running.
+/// error. Probe `Alive` (termasuk 403/404) selalu memulihkan ke running
+/// dan mereset hitungan kegagalan — respons HTTP apa pun <500 adalah
+/// bukti server hidup, bukan alasan restart.
 pub(crate) fn next_health_transition(
     current_status: &str,
     failures: i64,
-    probe_ok: bool,
+    probe_class: ProbeClass,
     auto_restart_count: i64,
 ) -> HealthTransition {
-    if probe_ok {
+    if probe_class.is_alive() {
         return HealthTransition {
             status: "running",
             failures: 0,
@@ -885,7 +939,7 @@ async fn server_row_for_supervisor(
     server_id: &str,
 ) -> Option<(ServerRow, String)> {
     let row = sqlx::query(
-        "SELECT s.*, p.path AS project_path FROM server_instances s JOIN projects p ON p.id=s.project_id WHERE s.id=?1",
+        "SELECT s.*, p.path AS project_path, p.php_version AS project_php_version FROM server_instances s JOIN projects p ON p.id=s.project_id WHERE s.id=?1",
     )
     .bind(server_id)
     .fetch_optional(pool)
@@ -908,6 +962,8 @@ async fn server_row_for_supervisor(
             backend_port: row.try_get("backend_port").ok().flatten(),
             health_failures: row.try_get("health_failures").unwrap_or(0),
             auto_restart_count: row.try_get("auto_restart_count").unwrap_or(0),
+            php_version: row.try_get("php_version").ok().flatten(),
+            project_php_version: row.try_get("project_php_version").ok().flatten(),
         },
         row.get("project_path"),
     ))
@@ -1085,7 +1141,7 @@ pub fn spawn_health_supervisor(state: AppState) {
                 let transition = next_health_transition(
                     &server.status,
                     server.health_failures,
-                    probe.ok,
+                    probe.class(),
                     server.auto_restart_count,
                 );
                 update_health_fields(
@@ -1096,7 +1152,7 @@ pub fn spawn_health_supervisor(state: AppState) {
                     warning.as_deref(),
                 )
                 .await;
-                if probe.ok {
+                if probe.class().is_alive() {
                     let streak = healthy_streaks.entry(server.id.clone()).or_insert(0);
                     *streak += 1;
                     if *streak >= 3 && server.auto_restart_count != 0 {
@@ -1414,54 +1470,84 @@ fn spawn_inprocess_supervisor(
             // ubah ke future agar bisa di-pin dan di-select.
             let serve = std::future::IntoFuture::into_future(axum::serve(listener, app));
             tokio::pin!(serve);
-            let mut healthy = false;
+            // Probe kesehatan berjalan di task terpisah dan mengirim
+            // hasilnya lewat channel. Meng-await probe di cabang select
+            // akan menghentikan polling future serve, sehingga server
+            // tidak pernah menjawab probe-nya sendiri dan health
+            // deadline memicu restart loop (bug v0.4.0).
+            let (probe_tx, mut probe_rx) = tokio::sync::mpsc::channel::<HttpProbe>(4);
+            let probe_target = probe_target_for(server.bind_lan, port);
+            let probe_task = tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    let probe =
+                        probe_http_target(&probe_target, Duration::from_millis(1600)).await;
+                    let alive = probe.class().is_alive();
+                    if probe_tx.send(probe).await.is_err() || alive {
+                        return;
+                    }
+                }
+            });
             let health_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
             let serve_result = loop {
                 tokio::select! {
                     r = &mut serve => break r.map_err(|e| e.to_string()),
-                    _ = tokio::time::sleep(Duration::from_millis(200)), if !healthy => {
-                        let probe = probe_http_target(
-                            &probe_target_for(server.bind_lan, port),
-                            Duration::from_millis(1600),
-                        )
-                        .await;
-                        if probe.ok {
-                            healthy = true;
-                            let status = db_status(&state.pool, &server.id).await;
-                            if status.as_deref() == Some("starting") {
-                                let warning = probe_warning(
-                                    &probe,
-                                    docroot_warning("static", &project_path, &doc_root, None),
-                                );
-                                set_running_with_probe(
-                                    &state.pool,
-                                    &server.id,
-                                    None,
-                                    true,
-                                    &probe,
-                                    warning.as_deref(),
-                                    attempts_used == 0,
-                                )
-                                .await;
-                                app_log(
-                                    &state.pool,
-                                    "server",
-                                    "info",
-                                    &format!(
-                                        "Health check lolos, server berjalan di port {}. {}",
-                                        port,
-                                        probe.evidence()
-                                    ),
-                                    Some(&server.id),
-                                )
-                                .await;
+                    probe = probe_rx.recv() => {
+                        match probe {
+                            Some(probe) if probe.class().is_alive() => {
+                                let status = db_status(&state.pool, &server.id).await;
+                                if status.as_deref() == Some("starting") {
+                                    let warning = probe_warning(
+                                        &probe,
+                                        docroot_warning("static", &project_path, &doc_root, None),
+                                    );
+                                    set_running_with_probe(
+                                        &state.pool,
+                                        &server.id,
+                                        None,
+                                        true,
+                                        &probe,
+                                        warning.as_deref(),
+                                        attempts_used == 0,
+                                    )
+                                    .await;
+                                    app_log(
+                                        &state.pool,
+                                        "server",
+                                        "info",
+                                        &format!(
+                                            "Health check lolos, server berjalan di port {}. {}",
+                                            port,
+                                            probe.evidence()
+                                        ),
+                                        Some(&server.id),
+                                    )
+                                    .await;
+                                }
+                                // Sehat: lanjut melayani sampai serve berakhir.
+                                break serve.await.map_err(|e| e.to_string());
                             }
-                        } else if tokio::time::Instant::now() > health_deadline {
-                            break Err("Health check gagal dalam 5 detik".to_string());
+                            Some(probe) => {
+                                if tokio::time::Instant::now() > health_deadline {
+                                    break Err(format!(
+                                        "Health check gagal dalam 5 detik. {}",
+                                        probe.evidence()
+                                    ));
+                                }
+                            }
+                            None => {
+                                if tokio::time::Instant::now() > health_deadline {
+                                    break Err("Health check gagal dalam 5 detik".to_string());
+                                }
+                            }
                         }
+                    }
+                    _ = tokio::time::sleep_until(health_deadline) => {
+                        break Err("Health check gagal dalam 5 detik".to_string());
                     }
                 }
             };
+            probe_task.abort();
             // Task serve berakhir (atau health check gagal).
             let status = db_status(&state.pool, &server.id).await;
             if !matches!(status.as_deref(), Some("running") | Some("degraded") | Some("starting")) {
@@ -1568,20 +1654,34 @@ fn free_loopback_port() -> Option<u16> {
         .map(|addr| addr.port())
 }
 
-/// Port proxy efektif: proxy eksplisit pengguna menang; Nginx/Caddy
-/// untuk proyek PHP tanpa proxy eksplisit memakai backend PHP internal
-/// (dialokasikan dan disimpan bila `allocate` true).
-pub(crate) async fn effective_proxy_port(
+/// Port proxy generik efektif: hanya proxy eksplisit pengguna.
+/// Komposit PHP memakai [`php_fpm_backend_port`] yang terpisah.
+pub(crate) fn effective_proxy_port(server: &ServerRow) -> Option<u16> {
+    server.proxy_port.and_then(|p| u16::try_from(p).ok())
+}
+
+/// true bila server ini mode komposit PHP-FPM: engine web server
+/// (Nginx/Caddy/Apache), proyek PHP, dan tanpa proxy eksplisit.
+pub(crate) fn is_fpm_composite(
+    server: &ServerRow,
+    project_path: &std::path::Path,
+    doc_root: &std::path::Path,
+) -> bool {
+    matches!(server.engine.as_str(), "nginx" | "caddy" | "apache")
+        && server.proxy_port.is_none()
+        && is_php_project(project_path, doc_root)
+}
+
+/// Port backend PHP-FPM untuk mode komposit (dialokasikan dan disimpan
+/// ke backend_port bila `allocate` true). None bila bukan komposit.
+pub(crate) async fn php_fpm_backend_port(
     state: &AppState,
     server: &ServerRow,
     project_path: &std::path::Path,
     doc_root: &std::path::Path,
     allocate: bool,
 ) -> Option<u16> {
-    if let Some(port) = server.proxy_port.and_then(|p| u16::try_from(p).ok()) {
-        return Some(port);
-    }
-    if !matches!(server.engine.as_str(), "nginx" | "caddy") || !is_php_project(project_path, doc_root) {
+    if !is_fpm_composite(server, project_path, doc_root) {
         return None;
     }
     if let Some(port) = server.backend_port.and_then(|p| u16::try_from(p).ok()) {
@@ -1607,6 +1707,59 @@ pub(crate) async fn effective_proxy_port(
     Some(port)
 }
 
+/// backend_kind yang disimpan untuk server: "php-fpm" untuk komposit
+/// FPM, "proxy" untuk proxy eksplisit, None selain itu.
+pub(crate) fn backend_kind_for(server: &ServerRow, fpm_port: Option<u16>) -> Option<&'static str> {
+    if fpm_port.is_some() {
+        Some("php-fpm")
+    } else if server.proxy_port.is_some() {
+        Some("proxy")
+    } else {
+        None
+    }
+}
+
+async fn set_backend_kind(pool: &sqlx::SqlitePool, server_id: &str, kind: Option<&str>) {
+    let _ = sqlx::query(
+        "UPDATE server_instances SET backend_kind=?1, updated_at=?2 WHERE id=?3",
+    )
+    .bind(kind)
+    .bind(now_iso())
+    .bind(server_id)
+    .execute(pool)
+    .await;
+}
+
+/// Tunggu port TCP loopback menerima koneksi (kesiapan backend FPM).
+async fn wait_tcp_ready(port: u16, timeout: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+}
+
+/// Ekor file log (baris terakhir) untuk pesan error jujur.
+fn file_tail(path: &std::path::Path, lines: usize) -> Vec<String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => text
+            .lines()
+            .rev()
+            .take(lines)
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// Jalankan validasi konfigurasi web server dengan binary sungguhan.
 /// Mengembalikan (valid, output gabungan stdout+stderr).
 pub async fn validate_webserver_config(
@@ -1623,7 +1776,8 @@ pub async fn validate_webserver_config(
         .ok_or_else(|| format!("Runtime {} tidak tersedia", engine))?;
     let doc_root = crate::util::resolve_inside(&PathBuf::from(project_path), &server.document_root, true)
         .map_err(|e| e.message)?;
-    let proxy_port = effective_proxy_port(
+    let proxy_port = effective_proxy_port(server);
+    let php_fpm_port = php_fpm_backend_port(
         state,
         server,
         &PathBuf::from(project_path),
@@ -1639,6 +1793,7 @@ pub async fn validate_webserver_config(
         data_dir: state.config.data_dir.clone(),
         server_id: server.id.clone(),
         proxy_port,
+        php_fpm_port,
         custom_config: config_override.map(|s| s.to_string()).or_else(|| server.config_text.clone()),
     };
     let config_path = crate::webservers::write_config(&input, engine)
@@ -1692,12 +1847,6 @@ async fn start_server_inner(
 
     // Validasi engine + ketersediaan binary sebelum mengalokasikan port.
     let engine = server.engine.as_str();
-    if engine == "apache" && is_php_project(&PathBuf::from(project_path), &doc_root) {
-        let msg = "Apache+PHP tidak tersedia di WebForge: build Apache tidak memiliki mod_proxy/PHP handler, jadi index.php tidak akan dieksekusi. Gunakan engine PHP, Nginx, atau Caddy untuk proyek PHP ini".to_string();
-        set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
-        app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
-        return Err(msg);
-    }
     let binary: Option<PathBuf> = match engine {
         "static" => None,
         "node" => {
@@ -1724,7 +1873,20 @@ async fn start_server_inner(
                 }
             }
         }
-        "php" | "caddy" | "nginx" | "apache" | "python" => match find_engine_binary(state, engine) {
+        "php" => match php::resolve_php(
+            state.native_lib_dir.as_deref(),
+            server.effective_php_version(),
+        )
+        .await
+        {
+            Ok(resolved) => Some(resolved.binary),
+            Err(msg) => {
+                set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
+                app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
+                return Err(msg);
+            }
+        },
+        "caddy" | "nginx" | "apache" | "python" => match find_engine_binary(state, engine) {
             Some(b) => Some(b),
             None => {
                 let msg = format!("Runtime {} tidak tersedia", engine);
@@ -1740,15 +1902,36 @@ async fn start_server_inner(
         }
     };
 
-    if matches!(engine, "nginx" | "caddy")
-        && server.proxy_port.is_none()
-        && is_php_project(&PathBuf::from(project_path), &doc_root)
-        && find_engine_binary(state, "php").is_none()
-    {
-        let msg = "Mode komposit PHP tidak dapat dimulai: runtime PHP tidak tersedia untuk backend php -S internal".to_string();
-        set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
-        app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
-        return Err(msg);
+    // Mode komposit PHP-FPM: versi PHP efektif wajib tersedia beserta
+    // binary FPM-nya sebelum port dialokasikan.
+    let mut resolved_fpm: Option<php::ResolvedPhp> = None;
+    if is_fpm_composite(server, &PathBuf::from(project_path), &doc_root) {
+        match php::resolve_php(
+            state.native_lib_dir.as_deref(),
+            server.effective_php_version(),
+        )
+        .await
+        {
+            Ok(resolved) => {
+                if resolved.fpm_binary.is_none() {
+                    let spec = php::php_version_spec(&resolved.version);
+                    let msg = format!(
+                        "Mode komposit PHP-FPM tidak dapat dimulai: binary PHP-FPM {} tidak ditemukan ({} di nativeLibraryDir atau php-fpm di PATH)",
+                        resolved.version,
+                        spec.map(|s| s.fpm_binary).unwrap_or("libphpfpm.so")
+                    );
+                    set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
+                    app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
+                    return Err(msg);
+                }
+                resolved_fpm = Some(resolved);
+            }
+            Err(msg) => {
+                set_status(&state.pool, &server.id, "error", None, None, Some(&msg), false).await;
+                app_log(&state.pool, "server", "error", &msg, Some(&server.id)).await;
+                return Err(msg);
+            }
+        }
     }
 
     set_status(&state.pool, &server.id, "starting", None, None, None, false).await;
@@ -1767,7 +1950,12 @@ async fn start_server_inner(
         "php" => {
             let binary = binary.expect("php binary validated");
             let settings = php::load_php_settings(&state.pool).await;
-            let ini_path = match php::write_php_ini(&state.config.data_dir, &settings) {
+            let smtp = crate::routes::mail::load_smtp_config(&state.pool, &state.config.data_dir).await;
+            let ini_path = match php::write_php_ini_with_smtp(
+                &state.config.data_dir,
+                &settings,
+                smtp.as_ref(),
+            ) {
                 Ok(p) => p,
                 Err(e) => return Err(fail_start(state, server, format!("Gagal menulis php.ini: {}", e)).await),
             };
@@ -1786,7 +1974,8 @@ async fn start_server_inner(
         }
         "caddy" | "nginx" | "apache" => {
             let binary = binary.expect("webserver binary validated");
-            let effective_proxy = effective_proxy_port(
+            let effective_proxy = effective_proxy_port(server);
+            let fpm_port = php_fpm_backend_port(
                 state,
                 server,
                 &PathBuf::from(project_path),
@@ -1794,15 +1983,16 @@ async fn start_server_inner(
                 true,
             )
             .await;
-            let auto_backend_port = if server.proxy_port.is_none() {
-                effective_proxy
-            } else {
-                None
-            };
             let mut effective_server = server.clone();
-            if auto_backend_port.is_some() {
-                effective_server.backend_port = auto_backend_port.map(|p| p as i64);
+            if fpm_port.is_some() {
+                effective_server.backend_port = fpm_port.map(|p| p as i64);
             }
+            set_backend_kind(
+                &state.pool,
+                &server.id,
+                backend_kind_for(server, fpm_port),
+            )
+            .await;
             let input = crate::webservers::WebServerInput {
                 host: host.to_string(),
                 port: port_u16,
@@ -1811,6 +2001,7 @@ async fn start_server_inner(
                 data_dir: state.config.data_dir.clone(),
                 server_id: server.id.clone(),
                 proxy_port: effective_proxy,
+                php_fpm_port: fpm_port,
                 custom_config: server.config_text.clone(),
             };
             let config_path = match crate::webservers::write_config(&input, engine) {
@@ -1840,58 +2031,144 @@ async fn start_server_inner(
                 ],
                 label: format!("{} server", engine),
             };
-            if let Some(backend_port) = auto_backend_port {
-                // Mode komposit: backend php -S internal di loopback,
-                // frontend Nginx/Caddy me-proxy ke backend itu.
-                let php_binary = match find_engine_binary(state, "php") {
+            if let Some(backend_port) = fpm_port {
+                // Mode komposit PHP-FPM: FPM di loopback backend_port,
+                // frontend meneruskan file .php ke FPM (fastcgi/fcgi).
+                let resolved = match resolved_fpm.clone() {
+                    Some(r) => r,
+                    None => {
+                        return Err(fail_start(
+                            state,
+                            server,
+                            "Mode komposit PHP-FPM gagal: resolusi PHP tidak tersedia".to_string(),
+                        )
+                        .await)
+                    }
+                };
+                let fpm_binary = match resolved.fpm_binary.clone() {
                     Some(b) => b,
                     None => {
                         return Err(fail_start(
                             state,
                             server,
-                            "Mode komposit PHP gagal: runtime PHP tidak tersedia".to_string(),
+                            format!(
+                                "Mode komposit PHP-FPM gagal: binary PHP-FPM {} tidak ditemukan",
+                                resolved.version
+                            ),
                         )
                         .await)
                     }
                 };
                 let settings = php::load_php_settings(&state.pool).await;
-                let ini_path = match php::write_php_ini(&state.config.data_dir, &settings) {
+                let smtp = crate::routes::mail::load_smtp_config(&state.pool, &state.config.data_dir).await;
+                if let Err(e) = php::write_php_ini_with_smtp(
+                    &state.config.data_dir,
+                    &settings,
+                    smtp.as_ref(),
+                ) {
+                    return Err(fail_start(
+                        state,
+                        server,
+                        format!("Gagal menulis php.ini backend komposit: {}", e),
+                    )
+                    .await);
+                }
+                let fpm_input = php::FpmConfigInput {
+                    data_dir: state.config.data_dir.clone(),
+                    server_id: server.id.clone(),
+                    backend_port,
+                    native_lib_dir: state.native_lib_dir.clone(),
+                };
+                let fpm_config = match php::write_fpm_config(&fpm_input) {
                     Ok(p) => p,
                     Err(e) => {
                         return Err(fail_start(
                             state,
                             server,
-                            format!("Gagal menulis php.ini backend komposit: {}", e),
+                            format!("Gagal menulis php-fpm.conf: {}", e),
                         )
                         .await)
                     }
                 };
+                // Validasi FPM sebelum start; kegagalan membawa output
+                // validasi apa adanya.
+                let fpm_home = php::fpm_home(&state.config.data_dir, &server.id);
+                let mut validate_cmd = tokio::process::Command::new(&fpm_binary);
+                validate_cmd.args(php::fpm_validate_args(&fpm_config));
+                crate::util::prepare_spawn(
+                    &mut validate_cmd,
+                    state.native_lib_dir.as_deref(),
+                    &fpm_home,
+                    Some(&fpm_home),
+                );
+                for (k, v) in php::fpm_envs(&state.config.data_dir) {
+                    validate_cmd.env(k, v);
+                }
+                match tokio::time::timeout(Duration::from_secs(10), validate_cmd.output()).await {
+                    Ok(Ok(out)) if out.status.success() => {}
+                    Ok(Ok(out)) => {
+                        let output = format!(
+                            "{}{}",
+                            String::from_utf8_lossy(&out.stdout),
+                            String::from_utf8_lossy(&out.stderr)
+                        );
+                        return Err(fail_start(
+                            state,
+                            server,
+                            format!(
+                                "Konfigurasi PHP-FPM {} tidak valid: {}",
+                                resolved.version,
+                                output.trim()
+                            ),
+                        )
+                        .await);
+                    }
+                    Ok(Err(e)) => {
+                        return Err(fail_start(
+                            state,
+                            server,
+                            format!("Validasi PHP-FPM gagal dijalankan: {}", e),
+                        )
+                        .await)
+                    }
+                    Err(_) => {
+                        return Err(fail_start(
+                            state,
+                            server,
+                            "Validasi PHP-FPM timeout".to_string(),
+                        )
+                        .await)
+                    }
+                }
                 let backend_launch = ChildLaunch {
-                    program: php_binary,
-                    args: php::build_php_server_args("127.0.0.1", backend_port, &doc_root, &ini_path),
+                    program: fpm_binary,
+                    args: php::fpm_launch_args(&fpm_config),
                     cwd: Some(PathBuf::from(project_path)),
-                    envs: vec![
-                        ("HOME".to_string(), state.config.data_dir.to_string_lossy().to_string()),
-                        ("TMPDIR".to_string(), php::php_tmp_dir(&state.config.data_dir).to_string_lossy().to_string()),
-                        ("PHPRC".to_string(), state.config.data_dir.to_string_lossy().to_string()),
-                    ],
-                    label: "PHP backend komposit".to_string(),
+                    envs: php::fpm_envs(&state.config.data_dir),
+                    label: format!("PHP-FPM {} backend komposit", resolved.version),
                 };
                 let (_backend_pid, backend_arc) =
                     match spawn_child_arc(state, &effective_server, &backend_launch, true).await {
                         Ok(v) => v,
                         Err(msg) => return Err(fail_start(state, server, msg).await),
                     };
-                let backend_probe =
-                    wait_probe_healthy(&loopback_target(backend_port), Duration::from_secs(5)).await;
-                if !backend_probe.ok {
-                    let tail = stderr_tail(state, &server.id, 10).await;
+                // Kesiapan backend: TCP FPM menerima koneksi.
+                if !wait_tcp_ready(backend_port, Duration::from_secs(5)).await {
+                    let mut tail = stderr_tail(state, &server.id, 10).await;
+                    tail.extend(file_tail(
+                        &php::fpm_error_log_path(&state.config.data_dir, &server.id),
+                        10,
+                    ));
                     kill_child_arc(&backend_arc).await;
                     let msg = format!(
-                        "Backend PHP komposit gagal sehat di 127.0.0.1:{}. {} Stderr terakhir:\n{}",
+                        "Backend PHP-FPM {} gagal siap di 127.0.0.1:{} dalam 5 detik. Stderr/log terakhir:\n{}",
+                        resolved.version,
                         backend_port,
-                        backend_probe.evidence(),
-                        tail.join("\n")
+                        if tail.is_empty() {
+                            "proses tidak mengeluarkan output".to_string()
+                        } else {
+                            tail.join("\n")
+                        }
                     );
                     return Err(fail_start(state, server, msg).await);
                 }
@@ -1900,8 +2177,8 @@ async fn start_server_inner(
                     "server",
                     "info",
                     &format!(
-                        "Mode komposit PHP aktif: {} me-proxy ke backend php -S internal 127.0.0.1:{}",
-                        engine, backend_port
+                        "Mode komposit PHP-FPM aktif: {} meneruskan file .php ke PHP-FPM {} di 127.0.0.1:{}",
+                        engine, resolved.version, backend_port
                     ),
                     Some(&server.id),
                 )
@@ -2276,7 +2553,7 @@ async fn finish_start(
 ) -> Result<(), String> {
     let timeout = engine_health_timeout(&server.engine);
     let probe = wait_server_healthy(server, timeout).await;
-    if probe.ok {
+    if probe.class().is_alive() {
         let effective_proxy = server
             .proxy_port
             .and_then(|p| u16::try_from(p).ok())
@@ -2451,6 +2728,7 @@ async fn stop_process_internal(state: &AppState, server_id: &str) {
 pub async fn stop_server(state: &AppState, server_id: &str) {
     set_status(&state.pool, server_id, "stopping", None, None, None, false).await;
     stop_process_internal(state, server_id).await;
+    set_backend_kind(&state.pool, server_id, None).await;
     set_status(&state.pool, server_id, "stopped", None, None, None, false).await;
     app_log(&state.pool, "server", "info", "Server dihentikan", Some(server_id)).await;
 }
@@ -2534,18 +2812,74 @@ mod tests {
     }
 
     #[test]
+    fn probe_classification() {
+        assert_eq!(probe_with_status(Some(200)).class(), ProbeClass::Alive);
+        assert_eq!(probe_with_status(Some(403)).class(), ProbeClass::Alive);
+        assert_eq!(probe_with_status(Some(404)).class(), ProbeClass::Alive);
+        assert_eq!(probe_with_status(Some(301)).class(), ProbeClass::Alive);
+        assert_eq!(probe_with_status(Some(500)).class(), ProbeClass::ServerError);
+        assert_eq!(probe_with_status(Some(502)).class(), ProbeClass::ServerError);
+        assert_eq!(probe_with_status(None).class(), ProbeClass::TransportFailure);
+    }
+
+    #[test]
+    fn health_transition_404_and_403_never_restart() {
+        // 404/403 beruntun: server hidup, failures selalu reset.
+        for code in [404u16, 403] {
+            let probe = probe_with_status(Some(code));
+            let mut failures = 0;
+            for _ in 0..5 {
+                let t = next_health_transition("running", failures, probe.class(), 0);
+                assert_eq!(t.failures, 0, "HTTP {} tidak boleh menambah failures", code);
+                assert_eq!(t.status, "running");
+                assert_eq!(t.action, HealthAction::None);
+                failures = t.failures;
+            }
+        }
+        // Bahkan dari degraded dengan failures menumpuk, 404 memulihkan.
+        let t = next_health_transition(
+            "degraded",
+            2,
+            probe_with_status(Some(404)).class(),
+            2,
+        );
+        assert_eq!(t.failures, 0);
+        assert_eq!(t.status, "running");
+        assert_eq!(t.action, HealthAction::None);
+    }
+
+    #[test]
+    fn health_transition_500_and_transport_restart() {
+        for class in [ProbeClass::ServerError, ProbeClass::TransportFailure] {
+            let first = next_health_transition("running", 0, class, 0);
+            assert_eq!(first.action, HealthAction::None);
+            let second = next_health_transition("running", first.failures, class, 0);
+            assert_eq!(second.action, HealthAction::MarkDegraded);
+            let third = next_health_transition("degraded", second.failures, class, 0);
+            assert_eq!(third.action, HealthAction::Restart);
+            let exhausted = next_health_transition(
+                "degraded",
+                2,
+                class,
+                php::MAX_RESTART_ATTEMPTS as i64,
+            );
+            assert_eq!(exhausted.action, HealthAction::MarkError);
+        }
+    }
+
+    #[test]
     fn health_transition_degrades_then_restarts_then_errors() {
-        let first = next_health_transition("running", 0, false, 0);
+        let first = next_health_transition("running", 0, ProbeClass::TransportFailure, 0);
         assert_eq!(first.failures, 1);
         assert_eq!(first.status, "running");
         assert_eq!(first.action, HealthAction::None);
 
-        let second = next_health_transition("running", first.failures, false, 0);
+        let second = next_health_transition("running", first.failures, ProbeClass::TransportFailure, 0);
         assert_eq!(second.failures, 2);
         assert_eq!(second.status, "degraded");
         assert_eq!(second.action, HealthAction::MarkDegraded);
 
-        let third = next_health_transition("degraded", second.failures, false, 0);
+        let third = next_health_transition("degraded", second.failures, ProbeClass::TransportFailure, 0);
         assert_eq!(third.failures, 3);
         assert_eq!(third.status, "degraded");
         assert_eq!(third.action, HealthAction::Restart);
@@ -2553,13 +2887,13 @@ mod tests {
         let exhausted = next_health_transition(
             "degraded",
             2,
-            false,
+            ProbeClass::TransportFailure,
             php::MAX_RESTART_ATTEMPTS as i64,
         );
         assert_eq!(exhausted.status, "error");
         assert_eq!(exhausted.action, HealthAction::MarkError);
 
-        let recovered = next_health_transition("degraded", 2, true, 1);
+        let recovered = next_health_transition("degraded", 2, ProbeClass::Alive, 1);
         assert_eq!(recovered.failures, 0);
         assert_eq!(recovered.status, "running");
         assert_eq!(recovered.action, HealthAction::None);
@@ -2593,10 +2927,15 @@ mod tests {
 
         let warning = docroot_warning("nginx", &root, &root, None).unwrap();
         assert!(warning.contains("index.php"));
-        assert!(warning.contains("mode proxy"));
+        assert!(warning.contains("PHP-FPM"));
         assert!(docroot_warning("nginx", &root, &root, Some(9000)).is_none());
+        // Apache+PHP kini didukung lewat FPM: tanpa backend aktif
+        // peringatannya mengarahkan ke mode komposit, bukan penolakan.
         let apache = docroot_warning("apache", &root, &root, None).unwrap();
-        assert!(apache.contains("Apache+PHP tidak tersedia"));
+        assert!(apache.contains("PHP-FPM"));
+        assert!(docroot_warning("apache", &root, &root, Some(19001)).is_none());
+        let statik = docroot_warning("static", &root, &root, None).unwrap();
+        assert!(statik.contains("tidak mengeksekusi PHP"));
         assert!(docroot_warning("php", &root, &root, None).is_none());
 
         std::fs::remove_dir_all(&root).ok();

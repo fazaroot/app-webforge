@@ -5,16 +5,16 @@ export default {
   theme: {
     extend: {
       colors: {
-        primary: '#5576E8',
-        appbg: '#F3F5FA',
-        surface: '#FFFFFF',
-        ink: '#20283A',
+        primary: '#0284c7',
+        appbg: '#e8f6fd',
+        surface: '#ffffff',
+        ink: '#0a2438',
         success: '#2EAD79',
         warning: '#E9A23B',
         danger: '#DC5866',
-        darkbg: '#101522',
-        darksurface: '#1A2233',
-        darkink: '#E9EDF6',
+        darkbg: '#04121f',
+        darksurface: '#0a2a44',
+        darkink: '#e6f4ff',
       },
     },
   },

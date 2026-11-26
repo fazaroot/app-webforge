@@ -4,7 +4,7 @@ import { Play, RefreshCw, RotateCw, Square, Trash2, Wifi } from 'lucide-react';
 import { api, getPowerStatus, isNativeWebForge, openBatterySettings, requestIgnoreBatteryOptimizations } from '../lib/api';
 import { formatDateTime, formatUptime } from '../lib/format';
 import { isPhpProject } from '../lib/php';
-import type { CreateServerBody, LanTestResult, Project, RuntimeInfo, ServerEngine, ServerInstance, ValidateConfigResult } from '../lib/types';
+import type { CreateServerBody, LanTestResult, PhpRuntimeInfo, PhpVersionInfo, Project, RuntimeInfo, ServerEngine, ServerInstance, ValidateConfigResult } from '../lib/types';
 import { Card, EmptyBox, ErrorBox, SkeletonRows, StatusPill, btnGhost, btnPrimary, inputCls } from '../components/ui';
 import { RuntimePanel } from '../components/RuntimePanel';
 import { PhpManager } from '../components/PhpManager';
@@ -63,6 +63,40 @@ export function availableEngines(project: Project | null, runtimes: RuntimeInfo[
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : 'Operasi gagal';
+}
+
+/** Daftar versi PHP dari info Core; fallback jujur untuk respons lama satu versi. */
+export function phpVersionOptions(info: PhpRuntimeInfo | undefined): PhpVersionInfo[] {
+  if (!info) return [];
+  if (info.versions && info.versions.length > 0) return info.versions;
+  if (!info.available) return [];
+  const legacy = info.selected_version ?? (info.version ? info.version.split('.').slice(0, 2).join('.') : '8.3');
+  return [{
+    version: legacy,
+    patch_version: info.version,
+    available: true,
+    fpm_available: false,
+    extensions: info.extensions,
+    binary_path: info.binary_path,
+    fpm_binary_path: null,
+    error: null,
+  }];
+}
+
+/** Versi PHP default: pilihan proyek, lalu rekomendasi framework, lalu pilihan Core. */
+export function resolveDefaultPhpVersion(project: Project | null, info: PhpRuntimeInfo | undefined): string {
+  const options = phpVersionOptions(info);
+  const candidates = [
+    project?.php_version ?? null,
+    project?.framework?.recommended_php_version ?? null,
+    info?.selected_version ?? null,
+    options.find((v) => v.available)?.version ?? null,
+    options[0]?.version ?? null,
+  ];
+  for (const c of candidates) {
+    if (c && options.some((v) => v.version === c)) return c;
+  }
+  return candidates.find((c) => !!c) ?? '';
 }
 
 function ServerConfigPanel({ server, onError }: { server: ServerInstance; onError: (m: string) => void }) {
@@ -350,6 +384,7 @@ export function Servers() {
   const [docRoot, setDocRoot] = useState('');
   const [proxyPort, setProxyPort] = useState('');
   const [command, setCommand] = useState('');
+  const [phpVersionOverride, setPhpVersionOverride] = useState<string | null>(null);
   const [formError, setFormError] = useState('');
   const [logsFor, setLogsFor] = useState<string | null>(null);
   const [configFor, setConfigFor] = useState<string | null>(null);
@@ -358,6 +393,7 @@ export function Servers() {
   const servers = useQuery({ queryKey: ['servers'], queryFn: api.servers, refetchInterval: 3000 });
   const projects = useQuery({ queryKey: ['projects'], queryFn: api.projects });
   const runtimes = useQuery({ queryKey: ['runtimes'], queryFn: () => api.runtimes() });
+  const phpInfo = useQuery({ queryKey: ['php-info'], queryFn: () => api.phpInfo() });
   const logs = useQuery({
     queryKey: ['server-logs', logsFor],
     queryFn: () => api.serverLogs(logsFor as string),
@@ -385,6 +421,7 @@ export function Servers() {
 
   function onProjectChange(id: string) {
     setProjectId(id);
+    setPhpVersionOverride(null);
     const p = (projects.data ?? []).find((x) => x.id === id) ?? null;
     const options = availableEngines(p, runtimeList);
     if (isPhpProject(p) && options.includes('php')) setEngine('php');
@@ -400,6 +437,12 @@ export function Servers() {
   const proxyValid = proxyPort.trim() === '' || (Number.isInteger(proxyNum) && proxyNum >= 1024 && proxyNum <= 65535);
   const isWebServerEngine = WEB_SERVER_ENGINES.includes(engine);
   const isCommandEngine = engine === 'python' || engine === 'node';
+  const needsPhpVersion = selectedIsPhp && (engine === 'php' || isWebServerEngine);
+  const phpVersions = phpVersionOptions(phpInfo.data);
+  const defaultPhpVersion = resolveDefaultPhpVersion(selectedProject, phpInfo.data);
+  const phpVersion = phpVersionOverride ?? defaultPhpVersion;
+  const selectedPhpVersionInfo = phpVersions.find((v) => v.version === phpVersion) ?? null;
+  const phpVersionUnavailable = needsPhpVersion && !phpInfo.isLoading && (!selectedPhpVersionInfo || !selectedPhpVersionInfo.available);
 
   const create = useMutation({
     mutationFn: () => {
@@ -409,6 +452,7 @@ export function Servers() {
       };
       if (isWebServerEngine && proxyPort.trim()) body.proxy_port = proxyNum;
       if (isCommandEngine && command.trim()) body.command = command.trim();
+      if (needsPhpVersion && phpVersion) body.php_version = phpVersion;
       return api.createServer(body);
     },
     onSuccess: () => { setFormError(''); invalidate(); },
@@ -437,8 +481,21 @@ export function Servers() {
     onError: onErr,
   });
 
-  const apachePhpBlocked = selectedIsPhp && engine === 'apache';
+  const apachePhp = selectedIsPhp && engine === 'apache';
   const phpComposite = selectedIsPhp && (engine === 'nginx' || engine === 'caddy') && proxyPort.trim() === '';
+  const createDisabledReason = create.isPending
+    ? 'Sedang membuat server…'
+    : !projectId
+      ? 'Pilih proyek terlebih dahulu.'
+      : !portValid
+        ? 'Port tidak valid: isi bilangan 1024–65535.'
+        : !proxyValid
+          ? 'Port backend reverse proxy tidak valid: isi bilangan 1024–65535 atau kosongkan.'
+          : needsPhpVersion && phpInfo.isLoading
+            ? 'Memuat daftar versi PHP dari Core…'
+            : phpVersionUnavailable
+              ? `Versi PHP ${phpVersion || 'yang dipilih'} tidak tersedia di perangkat ini${selectedPhpVersionInfo?.error ? `: ${selectedPhpVersionInfo.error}` : ''}. Pilih versi PHP lain yang tersedia.`
+              : '';
 
   return (
     <div className="space-y-4">
@@ -465,18 +522,42 @@ export function Servers() {
               {unavailableEngines.map((u) => `${ENGINE_LABELS[u.engine]}${u.reason ? ` (${u.reason})` : ''}`).join('; ')}.
             </p>
           )}
+          {needsPhpVersion && (
+            <label className="block text-sm">
+              <span className="text-xs font-medium text-slate-700 dark:text-slate-300">Versi PHP</span>
+              <select className={inputCls} value={phpVersion} disabled={phpInfo.isLoading || phpVersions.length === 0}
+                onChange={(e) => setPhpVersionOverride(e.target.value)}>
+                {phpVersions.length === 0 && <option value="">Versi PHP belum tersedia</option>}
+                {phpVersions.map((v) => (
+                  <option key={v.version} value={v.version} disabled={!v.available}>
+                    PHP {v.version}{v.patch_version ? ` (${v.patch_version})` : ''}{v.available ? '' : ' — tidak tersedia'}
+                  </option>
+                ))}
+              </select>
+              <span className="block text-xs text-slate-700 dark:text-slate-300 mt-1">
+                {phpInfo.isLoading
+                  ? 'Memuat daftar versi PHP dari Core…'
+                  : phpInfo.isError
+                    ? `Daftar versi PHP gagal dimuat: ${phpInfo.error instanceof Error ? phpInfo.error.message : 'error tidak diketahui'}`
+                    : selectedPhpVersionInfo
+                      ? selectedPhpVersionInfo.available
+                        ? `PHP ${selectedPhpVersionInfo.version} tersedia${selectedPhpVersionInfo.fpm_available ? ' dengan PHP-FPM' : ''}.`
+                        : `PHP ${selectedPhpVersionInfo.version} tidak tersedia${selectedPhpVersionInfo.error ? `: ${selectedPhpVersionInfo.error}` : ''}.`
+                      : 'Tidak ada versi PHP yang dilaporkan Core.'}
+              </span>
+            </label>
+          )}
           <input className={inputCls} inputMode="numeric" placeholder="Port (1024–65535)" value={port} onChange={(e) => setPort(e.target.value)} />
           {!portValid && port !== '' && <p className="text-xs text-danger">Port harus bilangan 1024–65535.</p>}
           {phpComposite && (
             <div className="rounded-lg bg-success/10 border border-success/40 text-sm px-3 py-2">
-              Mode komposit PHP: {ENGINE_LABELS[engine]} akan me-proxy ke backend <span className="font-mono">php -S</span> internal
+              Mode komposit PHP: {ENGINE_LABELS[engine]} akan meneruskan request PHP ke backend PHP-FPM internal
               yang dinyalakan otomatis, sehingga index.php dieksekusi nyata.
             </div>
           )}
-          {apachePhpBlocked && (
-            <div className="rounded-lg bg-warning/10 border border-warning/40 text-sm px-3 py-2" role="alert">
-              Apache+PHP tidak tersedia di WebForge: index.php tidak akan dieksekusi oleh Apache.
-              Gunakan engine PHP, Nginx, atau Caddy untuk proyek PHP ini.
+          {apachePhp && (
+            <div className="rounded-lg bg-success/10 border border-success/40 text-sm px-3 py-2">
+              Apache menjalankan PHP via PHP-FPM: request PHP diteruskan ke PHP-FPM versi terpilih, sehingga index.php dieksekusi nyata.
             </div>
           )}
           {selectedIsPhp && engine === 'static' && (
@@ -495,7 +576,7 @@ export function Servers() {
             </>
           )}
           {engine === 'apache' && (
-            <p className="text-xs text-slate-600 dark:text-slate-400">Apache WebForge tidak mendukung reverse proxy karena mod_proxy tidak dikompilasi. Gunakan Caddy atau Nginx untuk reverse proxy.</p>
+            <p className="text-xs text-slate-700 dark:text-slate-300">Untuk PHP, Apache memakai mod_proxy_fcgi ke PHP-FPM. Reverse proxy umum ke backend lain tetap tidak tersedia di Apache; gunakan Caddy atau Nginx untuk itu.</p>
           )}
           {isCommandEngine && (
             <label className="block text-sm">
@@ -517,9 +598,12 @@ export function Servers() {
               Aktifkan hanya di jaringan tepercaya, dan matikan bila tidak diperlukan.
             </div>
           )}
-          <button type="button" className={btnPrimary} disabled={!projectId || !portValid || !proxyValid || apachePhpBlocked || create.isPending} onClick={() => create.mutate()}>
+          <button type="button" className={btnPrimary} disabled={!!createDisabledReason} onClick={() => create.mutate()}>
             {create.isPending ? 'Membuat…' : 'Buat server'}
           </button>
+          {createDisabledReason && (
+            <p className="text-xs text-slate-800 dark:text-slate-200" role="status">Tombol nonaktif: {createDisabledReason}</p>
+          )}
           <p className="text-xs text-slate-600 dark:text-slate-400">Engine yang tampil hanya yang runtime-nya tersedia dan sesuai proyek terpilih. Bila Core menolak pembuatan server, pesan errornya ditampilkan apa adanya di atas.</p>
         </div>
       </Card>
@@ -535,13 +619,19 @@ export function Servers() {
             {servers.data!.map((s) => {
               const isWebServer = WEB_SERVER_ENGINES.includes(s.engine as ServerEngine);
               return (
-                <div key={s.id} className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
+                <div key={s.id} className="wf-glass-panel rounded-lg p-3">
                   <div className="flex items-center justify-between gap-2">
                     <p className="font-medium text-sm">{s.project_name} <span className="text-slate-600 dark:text-slate-400">· {s.engine} · :{s.port}</span></p>
                     <StatusPill status={s.status} />
                   </div>
                   <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">Lokal: <span className="break-all">{s.url_local}</span></p>
                   <p className="text-xs text-slate-600 dark:text-slate-400">LAN: {s.url_lan ?? (s.bind_lan ? 'IP LAN tidak terdeteksi' : 'tidak dibuka')}</p>
+                  {s.php_version && <p className="text-xs text-slate-700 dark:text-slate-300">Versi PHP: {s.php_version}</p>}
+                  {s.backend_kind && (
+                    <p className="text-xs text-slate-700 dark:text-slate-300">
+                      Backend: {s.backend_kind === 'php-fpm' ? 'PHP-FPM' : 'Reverse proxy'}
+                    </p>
+                  )}
                   {s.proxy_port !== null && s.proxy_port !== undefined && <p className="text-xs text-slate-600 dark:text-slate-400">Reverse proxy ke port backend: {s.proxy_port}</p>}
                   {s.backend_port !== null && s.backend_port !== undefined && (
                     <p className="text-xs text-slate-600 dark:text-slate-400">Backend PHP komposit internal: <span className="font-mono">127.0.0.1:{s.backend_port}</span></p>

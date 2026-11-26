@@ -34,6 +34,17 @@ vi.mock('../lib/api', () => ({
     phpSettings: vi.fn(),
     putPhpSettings: vi.fn(),
     phpCli: vi.fn(),
+    putProjectPhpVersion: vi.fn(),
+    projectComposer: vi.fn(),
+    runComposer: vi.fn(),
+    mailSettings: vi.fn(async () => ({ configured: false, host: '', port: 587, security: 'starttls', username: '', from: '', has_password: false })),
+    putMailSettings: vi.fn(),
+    testMail: vi.fn(),
+    sftpStatus: vi.fn(),
+    putSftpSettings: vi.fn(),
+    startSftp: vi.fn(),
+    stopSftp: vi.fn(),
+    resetSftpPassword: vi.fn(),
     settings: vi.fn(async () => ({})),
     putSettings: vi.fn(),
     health: vi.fn(),
@@ -127,7 +138,7 @@ describe('Servers engine PHP', () => {
     await selectProjectInServers('p-laravel');
     fireEvent.click(await screen.findByRole('button', { name: 'Buat server' }));
     await waitFor(() => expect(mockApi.createServer).toHaveBeenCalledWith({
-      project_id: 'p-laravel', engine: 'php', port: 8080, bind_lan: false, document_root: 'public',
+      project_id: 'p-laravel', engine: 'php', port: 8080, bind_lan: false, document_root: 'public', php_version: '8.3',
     }));
   });
 

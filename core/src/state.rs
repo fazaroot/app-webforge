@@ -79,6 +79,8 @@ pub struct AppState {
     /// Server yang sedang di-restart supervisor kesehatan; mencegah
     /// restart ganda dari siklus probe berikutnya.
     pub health_restarting: Arc<Mutex<HashSet<String>>>,
+    /// Handle server SFTP (status, start/stop, koneksi aktif).
+    pub sftp: Arc<crate::sftp::SftpHandle>,
 }
 
 impl AppState {

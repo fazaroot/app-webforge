@@ -4,6 +4,7 @@ import { FolderOpen, FolderPlus, RefreshCw, Trash2 } from 'lucide-react';
 import { api, isNativeWebForge, pickDirectory } from '../lib/api';
 import type { Project } from '../lib/types';
 import { formatDateTime } from '../lib/format';
+import { isPhpProject } from '../lib/php';
 import { Card, EmptyBox, ErrorBox, SkeletonRows, btnDanger, btnGhost, btnPrimary, inputCls } from '../components/ui';
 import { PhpReadiness } from '../components/PhpManager';
 import { useAppStore } from '../store';
@@ -71,6 +72,21 @@ export function Projects() {
     onSuccess: () => { setSelected(null); setDeleteFiles(false); void qc.invalidateQueries({ queryKey: ['projects'] }); },
     onError: (e) => setFormError(e instanceof Error ? e.message : 'Gagal menghapus proyek'),
   });
+  const selectedIsPhp = isPhpProject(selected);
+  const phpInfo = useQuery({
+    queryKey: ['php-info'],
+    queryFn: () => api.phpInfo(),
+    enabled: selectedIsPhp,
+  });
+  const setPhpVersion = useMutation({
+    mutationFn: ({ id, version }: { id: string; version: string | null }) => api.putProjectPhpVersion(id, version),
+    onSuccess: (_updated, { id }) => {
+      setFormError('');
+      void qc.invalidateQueries({ queryKey: ['projects'] });
+      void api.project(id).then(setSelected).catch(() => undefined);
+    },
+    onError: (e) => setFormError(e instanceof Error ? e.message : 'Gagal mengubah versi PHP proyek'),
+  });
 
   return (
     <div className="space-y-4">
@@ -136,10 +152,50 @@ export function Projects() {
               <p><span className="text-slate-600 dark:text-slate-400">Runtime disarankan:</span> {selected.framework.recommended_runtime}</p>
               <p><span className="text-slate-600 dark:text-slate-400">Document root disarankan:</span> {selected.framework.recommended_document_root}</p>
               <p><span className="text-slate-600 dark:text-slate-400">Kesiapan:</span> {readinessLabel(selected.framework.readiness)}</p>
+              {selected.framework.php_version_constraint && (
+                <p><span className="text-slate-600 dark:text-slate-400">Constraint versi PHP:</span> <span className="font-mono">{selected.framework.php_version_constraint}</span></p>
+              )}
+              {selected.framework.recommended_php_version && (
+                <p><span className="text-slate-600 dark:text-slate-400">Rekomendasi versi PHP:</span> {selected.framework.recommended_php_version}</p>
+              )}
               {selected.framework.detected_files.length > 0 && <p><span className="text-slate-600 dark:text-slate-400">File terdeteksi:</span> {selected.framework.detected_files.join(', ')}</p>}
               {selected.framework.notes.map((n) => <p key={n} className="text-warning text-xs">{n}</p>)}
             </div>
           ) : <p className="text-sm text-slate-600 dark:text-slate-400 mt-2">Framework belum terdeteksi. Jalankan scan.</p>}
+          {selectedIsPhp && (
+            <div className="mt-3 space-y-1">
+              <label className="block text-sm">
+                <span className="text-xs font-medium text-slate-700 dark:text-slate-300">Versi PHP proyek</span>
+                <select
+                  className={inputCls}
+                  value={selected.php_version ?? ''}
+                  disabled={setPhpVersion.isPending || phpInfo.isLoading}
+                  onChange={(e) => setPhpVersion.mutate({ id: selected.id, version: e.target.value || null })}
+                >
+                  <option value="">
+                    Ikuti rekomendasi/default Core{selected.framework?.recommended_php_version ? ` (${selected.framework.recommended_php_version})` : ''}
+                  </option>
+                  {(phpInfo.data?.versions ?? []).map((v) => (
+                    <option key={v.version} value={v.version} disabled={!v.available}>
+                      PHP {v.version}{v.patch_version ? ` (${v.patch_version})` : ''}{v.available ? '' : ' — tidak tersedia'}
+                    </option>
+                  ))}
+                  {selected.php_version && !(phpInfo.data?.versions ?? []).some((v) => v.version === selected.php_version) && (
+                    <option value={selected.php_version}>PHP {selected.php_version} (tersimpan)</option>
+                  )}
+                </select>
+              </label>
+              <p className="text-xs text-slate-700 dark:text-slate-300">
+                {setPhpVersion.isPending
+                  ? 'Menyimpan versi PHP proyek…'
+                  : phpInfo.isLoading
+                    ? 'Memuat daftar versi PHP dari Core…'
+                    : phpInfo.isError
+                      ? `Daftar versi PHP gagal dimuat: ${phpInfo.error instanceof Error ? phpInfo.error.message : 'error tidak diketahui'}`
+                      : `Versi PHP proyek saat ini: ${selected.php_version ?? 'mengikuti rekomendasi/default Core'}. Pilihan ini dipakai sebagai default saat membuat server PHP untuk proyek ini.`}
+              </p>
+            </div>
+          )}
           <PhpReadiness project={selected} />
           <div className="flex flex-wrap gap-2 mt-3">
             <button type="button" className={btnGhost} disabled={scan.isPending} onClick={() => scan.mutate(selected.id)}>

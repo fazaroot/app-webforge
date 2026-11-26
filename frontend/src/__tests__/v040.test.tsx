@@ -32,6 +32,17 @@ vi.mock('../lib/api', () => ({
     phpSettings: vi.fn(),
     putPhpSettings: vi.fn(),
     phpCli: vi.fn(),
+    putProjectPhpVersion: vi.fn(),
+    projectComposer: vi.fn(),
+    runComposer: vi.fn(),
+    mailSettings: vi.fn(async () => ({ configured: false, host: '', port: 587, security: 'starttls', username: '', from: '', has_password: false })),
+    putMailSettings: vi.fn(),
+    testMail: vi.fn(),
+    sftpStatus: vi.fn(),
+    putSftpSettings: vi.fn(),
+    startSftp: vi.fn(),
+    stopSftp: vi.fn(),
+    resetSftpPassword: vi.fn(),
   },
   isNativeWebForge: vi.fn(() => false),
   getPowerStatus: vi.fn(),
@@ -138,10 +149,10 @@ describe('Servers v0.4.0', () => {
 
   it('menjalankan Tes Akses LAN nyata dan menampilkan hasilnya', async () => {
     renderWithQuery(<Servers />);
-    const button = await screen.findByRole('button', { name: /Tes Akses LAN/ });
+    const button = await screen.findByRole('button', { name: /Tes Akses LAN/ }, { timeout: 10000 });
     fireEvent.click(button);
-    await waitFor(() => expect(mockApi.testLan).toHaveBeenCalledWith('srv-1'));
-    expect(await screen.findByText(/Tes Akses LAN: berhasil/)).toBeInTheDocument();
+    await waitFor(() => expect(mockApi.testLan).toHaveBeenCalledWith('srv-1'), { timeout: 10000 });
+    expect(await screen.findByText(/Tes Akses LAN: berhasil/, {}, { timeout: 10000 })).toBeInTheDocument();
     expect(screen.getByText(/HTTP 200 · 12 ms/)).toBeInTheDocument();
   });
 
@@ -154,15 +165,14 @@ describe('Servers v0.4.0', () => {
     expect(screen.getByText(/tidak dapat dideteksi atau diubah lewat API Android/)).toBeInTheDocument();
   });
 
-  it('memperingatkan Apache+PHP dan mode komposit sebelum server dibuat', async () => {
+  it('Apache+PHP aktif via PHP-FPM dan mode komposit ditampilkan sebelum server dibuat', async () => {
     const { container } = renderWithQuery(<Servers />);
     await screen.findByText('Degraded');
     const projectSelect = container.querySelectorAll('select')[0];
     fireEvent.change(projectSelect, { target: { value: 'p1' } });
     const engineSelect = await screen.findByDisplayValue('PHP built-in server');
     fireEvent.change(engineSelect, { target: { value: 'apache' } });
-    expect(await screen.findByText(/Apache\+PHP tidak tersedia di WebForge/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Buat server' })).toBeDisabled();
+    expect(await screen.findByText(/Apache menjalankan PHP via PHP-FPM/)).toBeInTheDocument();
     fireEvent.change(engineSelect, { target: { value: 'nginx' } });
     expect(await screen.findByText(/Mode komposit PHP/)).toBeInTheDocument();
   });

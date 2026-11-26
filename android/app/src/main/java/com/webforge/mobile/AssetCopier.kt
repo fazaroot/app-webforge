@@ -12,6 +12,9 @@ import java.io.IOException
  * - node-version.txt, python-version.txt (info versi runtime)
  * - postgres-share.zip, mariadb-share.zip (share database, diekstrak core)
  * - npm.zip (npm CLI, diekstrak core saat instalasi dependensi Node)
+ * - composer.phar (Composer 2.11.3, dijalankan core lewat PHP CLI)
+ * - cacert.pem (bundle CA Mozilla untuk curl/openssl PHP)
+ * - icudt74l.dat (data ICU 74.2 untuk ekstensi intl PHP)
  *
  * Asset yang tidak ada di APK dilewati apa adanya; core akan melaporkan
  * runtime terkait tidak tersedia. Tidak ada klaim asset siap tanpa file.
@@ -28,7 +31,10 @@ object AssetCopier {
         "python-version.txt",
         "postgres-share.zip",
         "mariadb-share.zip",
-        "npm.zip"
+        "npm.zip",
+        "composer.phar",
+        "cacert.pem",
+        "icudt74l.dat"
     )
 
     fun copyRuntimeAssets(context: Context) {

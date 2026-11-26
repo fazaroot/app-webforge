@@ -36,6 +36,10 @@ pub struct ServerOut {
     pub last_health_target: Option<String>,
     pub health_failures: i64,
     pub auto_restart_count: i64,
+    /// Pilihan versi PHP server (None = warisi proyek/default).
+    pub php_version: Option<String>,
+    /// "php-fpm" | "proxy" | null.
+    pub backend_kind: Option<String>,
 }
 
 pub fn server_out(row: &sqlx::sqlite::SqliteRow) -> ServerOut {
@@ -115,10 +119,23 @@ pub fn server_out(row: &sqlx::sqlite::SqliteRow) -> ServerOut {
         last_health_target: row.try_get("last_health_target").ok().flatten(),
         health_failures: row.try_get("health_failures").unwrap_or(0),
         auto_restart_count: row.try_get("auto_restart_count").unwrap_or(0),
+        php_version: row.try_get("php_version").ok().flatten(),
+        backend_kind: row
+            .try_get::<Option<String>, _>("backend_kind")
+            .ok()
+            .flatten()
+            .or_else(|| {
+                // Baris lama sebelum kolom backend_kind terisi.
+                if row.try_get::<Option<i64>, _>("proxy_port").ok().flatten().is_some() {
+                    Some("proxy".to_string())
+                } else {
+                    None
+                }
+            }),
     }
 }
 
-const SERVER_SELECT: &str = "SELECT s.*, p.name AS project_name, p.path AS project_path FROM server_instances s JOIN projects p ON p.id = s.project_id";
+const SERVER_SELECT: &str = "SELECT s.*, p.name AS project_name, p.path AS project_path, p.php_version AS project_php_version FROM server_instances s JOIN projects p ON p.id = s.project_id";
 
 pub async fn get_server_row(pool: &sqlx::SqlitePool, id: &str) -> ApiResult<sqlx::sqlite::SqliteRow> {
     sqlx::query(&format!("{} WHERE s.id=?1", SERVER_SELECT))
@@ -147,6 +164,8 @@ pub struct CreateServer {
     pub document_root: Option<String>,
     pub proxy_port: Option<i64>,
     pub command: Option<String>,
+    /// Pilihan versi PHP server; kosong = warisi proyek.
+    pub php_version: Option<String>,
 }
 
 pub async fn create_server(
@@ -154,12 +173,21 @@ pub async fn create_server(
     Json(body): Json<CreateServer>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let project = super::projects::get_project_row(&state.pool, &body.project_id).await?;
+    let php_version = crate::php::validate_php_version_choice(body.php_version.as_deref())
+        .map_err(ApiError::bad_request)?;
+    let project_php_version: Option<String> =
+        project.try_get("php_version").ok().flatten();
+    let effective_php_version = php_version
+        .clone()
+        .or_else(|| project_php_version.clone());
     if body.engine == "php" {
-        if crate::php::find_php_binary(state.native_lib_dir.as_deref()).is_none() {
-            return Err(ApiError::new(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "PHP tidak tersedia: libphp.so tidak ditemukan di nativeLibraryDir dan php tidak ada di PATH",
-            ));
+        if let Err(e) = crate::php::resolve_php(
+            state.native_lib_dir.as_deref(),
+            effective_php_version.as_deref(),
+        )
+        .await
+        {
+            return Err(ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, e));
         }
     } else if body.engine != "static" {
         let runtimes = crate::runtime::runtimes_cached(&state, false).await;
@@ -189,33 +217,40 @@ pub async fn create_server(
         true,
     )
     .map_err(|e| ApiError::bad_request(format!("Document root tidak valid: {}", e.message)))?;
-    if body.engine == "apache" && body.proxy_port.is_some() {
-        return Err(ApiError::bad_request(
-            "Apache httpd WebForge tidak mendukung reverse proxy: mod_proxy tidak dikompilasi. Gunakan Caddy atau Nginx untuk reverse proxy",
-        ));
-    }
-    if body.engine == "apache"
-        && crate::process::is_php_project(&std::path::PathBuf::from(&project_path), &doc_root)
-    {
-        return Err(ApiError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Apache+PHP tidak tersedia di WebForge: index.php tidak akan dieksekusi oleh Apache. Gunakan engine PHP, Nginx, atau Caddy",
-        ));
-    }
-    if matches!(body.engine.as_str(), "nginx" | "caddy")
+    // Komposit PHP-FPM (Nginx/Caddy/Apache + proyek PHP tanpa proxy
+    // eksplisit): versi PHP efektif dan binary FPM-nya wajib ada.
+    if matches!(body.engine.as_str(), "nginx" | "caddy" | "apache")
         && body.proxy_port.is_none()
         && crate::process::is_php_project(&std::path::PathBuf::from(&project_path), &doc_root)
-        && crate::php::find_php_binary(state.native_lib_dir.as_deref()).is_none()
     {
-        return Err(ApiError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Mode komposit PHP membutuhkan runtime PHP untuk backend php -S internal, tetapi PHP tidak tersedia",
-        ));
+        match crate::php::resolve_php(
+            state.native_lib_dir.as_deref(),
+            effective_php_version.as_deref(),
+        )
+        .await
+        {
+            Ok(resolved) if resolved.fpm_binary.is_some() => {}
+            Ok(resolved) => {
+                return Err(ApiError::new(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    format!(
+                        "Mode komposit PHP-FPM membutuhkan binary PHP-FPM {}, tetapi tidak ditemukan di nativeLibraryDir/PATH",
+                        resolved.version
+                    ),
+                ));
+            }
+            Err(e) => {
+                return Err(ApiError::new(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    format!("Mode komposit PHP-FPM tidak dapat dibuat: {}", e),
+                ));
+            }
+        }
     }
     let id = new_id();
     let now = now_iso();
     sqlx::query(
-        "INSERT INTO server_instances (id, project_id, engine, port, bind_lan, document_root, status, proxy_port, command, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,'stopped',?7,?8,?9,?9)",
+        "INSERT INTO server_instances (id, project_id, engine, port, bind_lan, document_root, status, proxy_port, command, php_version, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,'stopped',?7,?8,?9,?10,?10)",
     )
     .bind(&id)
     .bind(&body.project_id)
@@ -225,6 +260,7 @@ pub async fn create_server(
     .bind(&document_root)
     .bind(body.proxy_port)
     .bind(&body.command)
+    .bind(&php_version)
     .bind(&now)
     .execute(&state.pool)
     .await
@@ -267,6 +303,8 @@ fn to_server_row(row: &sqlx::sqlite::SqliteRow) -> ServerRow {
         backend_port: row.try_get("backend_port").ok().flatten(),
         health_failures: row.try_get("health_failures").unwrap_or(0),
         auto_restart_count: row.try_get("auto_restart_count").unwrap_or(0),
+        php_version: row.try_get("php_version").ok().flatten(),
+        project_php_version: row.try_get("project_php_version").ok().flatten(),
     }
 }
 
@@ -399,7 +437,8 @@ async fn generated_config(state: &AppState, server: &ServerRow, project_path: &s
         true,
     )
     .map_err(|e| ApiError::bad_request(e.message))?;
-    let proxy_port = crate::process::effective_proxy_port(
+    let proxy_port = crate::process::effective_proxy_port(server);
+    let php_fpm_port = crate::process::php_fpm_backend_port(
         state,
         server,
         &std::path::PathBuf::from(project_path),
@@ -415,6 +454,7 @@ async fn generated_config(state: &AppState, server: &ServerRow, project_path: &s
         data_dir: state.config.data_dir.clone(),
         server_id: server.id.clone(),
         proxy_port,
+        php_fpm_port,
         custom_config: None,
     };
     match server.engine.as_str() {

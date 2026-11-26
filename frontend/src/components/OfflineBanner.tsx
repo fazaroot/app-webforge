@@ -16,7 +16,7 @@ export function OfflineBanner({ onRetry, retrying, loadError }: {
           {loadError && <p className="text-xs mt-1 break-all">Penyebab: {loadError}</p>}
         </div>
       </div>
-      <button type="button" onClick={onRetry} disabled={retrying} className="shrink-0 rounded-lg bg-white text-danger px-3 py-1.5 text-sm font-medium disabled:opacity-60">
+      <button type="button" onClick={onRetry} disabled={retrying} className="shrink-0 rounded-lg border border-white/70 bg-white text-danger px-3 py-1.5 text-sm font-medium disabled:bg-slate-300 disabled:text-slate-800 disabled:border-slate-100 disabled:cursor-not-allowed">
         {retrying ? 'Mencoba…' : 'Coba lagi'}
       </button>
     </div>

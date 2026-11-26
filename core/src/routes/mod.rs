@@ -4,8 +4,14 @@ pub mod php;
 pub mod projects;
 pub mod runtimes;
 pub mod servers;
+pub mod sftp;
 pub mod system;
 pub mod terminal;
+
+/// Modul mail tinggal di core/src/mail.rs (kontrak v0.5.0) dan
+/// didaftarkan dari sini.
+#[path = "../mail.rs"]
+pub mod mail;
 
 use crate::state::AppState;
 use axum::extract::{Request, State};
@@ -66,6 +72,16 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runtimes/php/info", get(php::php_info))
         .route("/api/php/settings", get(php::get_php_settings).put(php::put_php_settings))
         .route("/api/projects/:id/php-cli", post(php::php_cli))
+        .route("/api/projects/:id/php-version", axum::routing::put(projects::put_php_version))
+        .route("/api/projects/:id/composer", get(php::project_composer))
+        .route("/api/projects/:id/composer/run", post(php::composer_run))
+        .route("/api/mail/settings", get(mail::get_mail_settings).put(mail::put_mail_settings))
+        .route("/api/mail/test", post(mail::test_mail))
+        .route("/api/sftp/status", get(sftp::status))
+        .route("/api/sftp/settings", axum::routing::put(sftp::put_settings))
+        .route("/api/sftp/start", post(sftp::start))
+        .route("/api/sftp/stop", post(sftp::stop))
+        .route("/api/sftp/reset-password", post(sftp::reset_password))
         .route("/api/projects", get(projects::list_projects).post(projects::create_project))
         .route("/api/projects/register", post(projects::register_project))
         .route("/api/projects/:id", get(projects::get_project).delete(projects::delete_project))

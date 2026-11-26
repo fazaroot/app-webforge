@@ -18,11 +18,13 @@ pub struct ProjectOut {
     pub created_at: String,
     pub updated_at: String,
     pub framework: Option<Value>,
+    /// Pilihan versi PHP proyek (None = aturan default).
+    pub php_version: Option<String>,
 }
 
 pub async fn framework_json(pool: &sqlx::SqlitePool, project_id: &str) -> Option<Value> {
     let row = sqlx::query(
-        "SELECT framework, language, version, recommended_runtime, recommended_document_root, readiness, notes, detected_files
+        "SELECT framework, language, version, recommended_runtime, recommended_document_root, readiness, notes, detected_files, php_version_constraint, recommended_php_version
          FROM project_frameworks WHERE project_id=?1 ORDER BY detected_at DESC LIMIT 1",
     )
     .bind(project_id)
@@ -41,6 +43,8 @@ pub async fn framework_json(pool: &sqlx::SqlitePool, project_id: &str) -> Option
         "readiness": row.get::<String, _>("readiness"),
         "notes": notes,
         "detected_files": detected,
+        "php_version_constraint": row.try_get::<Option<String>, _>("php_version_constraint").ok().flatten(),
+        "recommended_php_version": row.try_get::<Option<String>, _>("recommended_php_version").ok().flatten(),
     }))
 }
 
@@ -56,6 +60,7 @@ pub async fn project_out(pool: &sqlx::SqlitePool, row: &sqlx::sqlite::SqliteRow)
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
         framework,
+        php_version: row.try_get("php_version").ok().flatten(),
     }
 }
 
@@ -78,8 +83,8 @@ pub async fn run_scan(state: &AppState, project_id: &str, project_path: &str) ->
         .await
         .map_err(db_err)?;
     sqlx::query(
-        "INSERT INTO project_frameworks (id, project_id, framework, language, version, recommended_runtime, recommended_document_root, readiness, notes, detected_files, detected_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        "INSERT INTO project_frameworks (id, project_id, framework, language, version, recommended_runtime, recommended_document_root, readiness, notes, detected_files, detected_at, php_version_constraint, recommended_php_version)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
     )
     .bind(new_id())
     .bind(project_id)
@@ -92,6 +97,8 @@ pub async fn run_scan(state: &AppState, project_id: &str, project_path: &str) ->
     .bind(serde_json::to_string(&info.notes).unwrap_or("[]".into()))
     .bind(serde_json::to_string(&info.detected_files).unwrap_or("[]".into()))
     .bind(&now)
+    .bind(&info.php_version_constraint)
+    .bind(&info.recommended_php_version)
     .execute(&state.pool)
     .await
     .map_err(db_err)?;
@@ -274,4 +281,30 @@ pub async fn scan_project(State(state): State<AppState>, Path(id): Path<String>)
     let path: String = row.get("path");
     let info = run_scan(&state, &id, &path).await?;
     Ok(Json(info))
+}
+
+#[derive(Deserialize)]
+pub struct PutPhpVersion {
+    /// Versi PHP pilihan ("8.2"/"8.3"/"8.4") atau null untuk
+    /// kembali ke aturan default.
+    pub php_version: Option<String>,
+}
+
+pub async fn put_php_version(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<PutPhpVersion>,
+) -> ApiResult<Json<Value>> {
+    let _ = get_project_row(&state.pool, &id).await?;
+    let version = crate::php::validate_php_version_choice(body.php_version.as_deref())
+        .map_err(ApiError::bad_request)?;
+    sqlx::query("UPDATE projects SET php_version=?1, updated_at=?2 WHERE id=?3")
+        .bind(&version)
+        .bind(now_iso())
+        .bind(&id)
+        .execute(&state.pool)
+        .await
+        .map_err(db_err)?;
+    let row = get_project_row(&state.pool, &id).await?;
+    Ok(Json(serde_json::to_value(project_out(&state.pool, &row).await).unwrap()))
 }

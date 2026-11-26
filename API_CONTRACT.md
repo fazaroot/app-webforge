@@ -109,3 +109,12 @@ Jobs: core (cargo test + build), frontend (npm ci/test/build), android (needs fr
 
 ## Aturan jujur (semua)
 Tidak ada mock data di jalur produksi, tidak ada tombol mati, status running hanya dari health check, runtime belum ada = unavailable + alasan.
+
+## Addendum v0.5.0 (PHP multi-versi/FPM, Composer, mail, SFTP)
+
+- GET /api/runtimes/php/info?version=8.2 -> field lama + `selected_version` + `versions:[{version,patch_version,available,fpm_available,extensions,binary_path,fpm_binary_path,error}]` + `composer:{available,version,path,error}`.
+- ProjectOut: `php_version` (string|null); Framework: `php_version_constraint` + `recommended_php_version`. PUT /api/projects/:id/php-version {php_version: string|null}. CreateServer menerima `php_version`; ServerOut: `php_version` + `backend_kind` ("php-fpm"|"proxy"|null).
+- GET /api/projects/:id/composer -> {available,version,has_composer_json,has_lock,vendor_present,php_version,recommended_php_version,error}; POST /api/projects/:id/composer/run {action:"install"|"update"|"require",package?,php_version?} -> {exit_code,stdout,stderr,timed_out,duration_ms}.
+- GET/PUT /api/mail/settings {configured,host,port,security:"none"|"starttls"|"tls",username,from,has_password} (PUT: password write-only opsional + clear_password); POST /api/mail/test {to} -> {ok,error,output,duration_ms}.
+- GET /api/sftp/status {running,bind_lan,port,username,host_key_fingerprint,root,started_at,last_error,connections:[{id,username,remote,connected_at,last_activity}]}; PUT /api/sftp/settings {username,password?,port,bind_lan}; POST /api/sftp/start|stop; POST /api/sftp/reset-password -> {password}.
+- Apache+PHP berjalan via PHP-FPM (mod_proxy_fcgi); Nginx/Caddy PHP tanpa proxy eksplisit memakai PHP-FPM internal (`backend_kind: "php-fpm"`).

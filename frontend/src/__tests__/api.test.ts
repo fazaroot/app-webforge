@@ -145,6 +145,46 @@ describe('api client', () => {
     expect((fetchMock.mock.calls[3] as unknown as [string])[0]).toContain('/api/databases/db-1/stop');
   });
 
+  it('memanggil endpoint v0.5.0 (PHP multi-versi, Composer, mail, SFTP) sesuai kontrak', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ ok: true }));
+    vi.stubGlobal('fetch', fetchMock);
+    await api.phpInfo('8.2');
+    expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toContain('/api/runtimes/php/info?version=8.2');
+    await api.putProjectPhpVersion('p1', '8.4');
+    const [verUrl, verInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(verUrl).toContain('/api/projects/p1/php-version');
+    expect(verInit.method).toBe('PUT');
+    expect(JSON.parse(String(verInit.body))).toEqual({ php_version: '8.4' });
+    await api.projectComposer('p1');
+    expect((fetchMock.mock.calls[2] as unknown as [string])[0]).toContain('/api/projects/p1/composer');
+    await api.runComposer('p1', { action: 'require', package: 'monolog/monolog', php_version: '8.3' });
+    const [runUrl, runInit] = fetchMock.mock.calls[3] as unknown as [string, RequestInit];
+    expect(runUrl).toContain('/api/projects/p1/composer/run');
+    expect(JSON.parse(String(runInit.body))).toEqual({ action: 'require', package: 'monolog/monolog', php_version: '8.3' });
+    await api.mailSettings();
+    expect((fetchMock.mock.calls[4] as unknown as [string])[0]).toContain('/api/mail/settings');
+    await api.putMailSettings({ host: 'smtp.contoh.com', port: 587, security: 'starttls', username: 'u', from: 'noreply@contoh.com' });
+    const [mailUrl, mailInit] = fetchMock.mock.calls[5] as unknown as [string, RequestInit];
+    expect(mailUrl).toContain('/api/mail/settings');
+    expect(mailInit.method).toBe('PUT');
+    await api.testMail('tujuan@contoh.com');
+    const [testUrl, testInit] = fetchMock.mock.calls[6] as unknown as [string, RequestInit];
+    expect(testUrl).toContain('/api/mail/test');
+    expect(JSON.parse(String(testInit.body))).toEqual({ to: 'tujuan@contoh.com' });
+    await api.sftpStatus();
+    expect((fetchMock.mock.calls[7] as unknown as [string])[0]).toContain('/api/sftp/status');
+    await api.putSftpSettings({ username: 'webforge', port: 2222, bind_lan: false });
+    const [sftpUrl, sftpInit] = fetchMock.mock.calls[8] as unknown as [string, RequestInit];
+    expect(sftpUrl).toContain('/api/sftp/settings');
+    expect(sftpInit.method).toBe('PUT');
+    await api.startSftp();
+    expect((fetchMock.mock.calls[9] as unknown as [string])[0]).toContain('/api/sftp/start');
+    await api.stopSftp();
+    expect((fetchMock.mock.calls[10] as unknown as [string])[0]).toContain('/api/sftp/stop');
+    await api.resetSftpPassword();
+    expect((fetchMock.mock.calls[11] as unknown as [string])[0]).toContain('/api/sftp/reset-password');
+  });
+
   it('menyusun query string untuk daftar file', async () => {
     const fetchMock = vi.fn(async () => jsonResponse([]));
     vi.stubGlobal('fetch', fetchMock);

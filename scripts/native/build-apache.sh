@@ -21,14 +21,18 @@
 #
 # Modul statis: mime, dir, log_config, authz_core, authz_host,
 # authn_core, authz_user, unixd, setenvif, alias, rewrite, env, headers,
-# reqtimeout, ssl, socache_shmcb, watchdog. MPM event, mod_so dimatikan
-# (tidak ada modul dinamis/LoadModule).
+# reqtimeout, ssl, socache_shmcb, watchdog, proxy, proxy_fcgi,
+# proxy_http. MPM event, mod_so dimatikan (tidak ada modul
+# dinamis/LoadModule).
 #
-# mod_proxy SENGAJA tidak dikompilasi pada v0.3.0: reverse proxy Apache
-# tidak didukung build ini, dan core (webservers.rs) mengembalikan error
-# jujur bila proxy diminta untuk Apache. mod_ssl dikompilasi agar
-# custom_config pengguna bisa memakai HTTPS; config hasil generate core
-# tetap HTTP polos.
+# Sejak v0.5.0 mod_proxy + mod_proxy_fcgi + mod_proxy_http dikompilasi
+# statis (sebelumnya mod_proxy sengaja absen): Apache bisa menjalankan
+# PHP lewat PHP-FPM (ProxyPass unix:<socket>|fcgi://...) dan reverse
+# proxy HTTP ke backend lokal. Verifikasi di akhir skrip memeriksa
+# simbol proxy_module, proxy_fcgi_module, dan proxy_http_module pada
+# binary sebelum strip. mod_ssl dikompilasi agar custom_config
+# pengguna bisa memakai HTTPS; config hasil generate core tetap HTTP
+# polos.
 #
 # Uji cross-compile: APR/httpd memakai autoconf. Uji yang menjalankan
 # program target diganti cache variables ac_cv_*/apr_cv_* di bawah
@@ -255,7 +259,7 @@ tar -xzf "$DL/httpd.tar.gz" -C "$SRC"
     --with-ssl="$PREFIX" \
     --with-expat="$PREFIX" \
     --with-mpm=event \
-    --enable-mods-static="mime dir log_config authz_core authz_host authn_core authz_user unixd setenvif alias rewrite env headers reqtimeout ssl socache_shmcb watchdog" \
+    --enable-mods-static="mime dir log_config authz_core authz_host authn_core authz_user unixd setenvif alias rewrite env headers reqtimeout ssl socache_shmcb watchdog proxy proxy_fcgi proxy_http" \
     --enable-mods-shared=none \
     --disable-htpasswd --disable-htdigest --disable-htdbm --disable-ext-filter \
     CC="$CC" CXX="$CXX" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP" \
@@ -291,6 +295,28 @@ fi
 
 OUT="$OUTPUT_DIR/libhttpd.so"
 cp "$HTTPD_BIN" "$OUT"
+
+# Verifikasi simbol modul proxy SEBELUM strip (strip menghapus symtab;
+# simbol *_module bukan simbol dinamis). Gagal keras bila modul proxy
+# tidak benar-benar terkompilasi statis.
+if [ -x "$TOOLCHAIN/bin/llvm-nm" ]; then
+  NM="$TOOLCHAIN/bin/llvm-nm"
+else
+  NM="nm"
+fi
+NM_OUT=$("$NM" "$OUT" 2>/dev/null || true)
+if [ -z "$NM_OUT" ]; then
+  echo "::error::Tidak bisa membaca simbol libhttpd.so dengan $NM" >&2
+  exit 1
+fi
+for mod in proxy_module proxy_fcgi_module proxy_http_module; do
+  if ! printf '%s\n' "$NM_OUT" | grep -E "[[:space:]]${mod}$" >/dev/null; then
+    echo "::error::Simbol $mod tidak ditemukan pada libhttpd.so (modul proxy tidak terkompilasi statis)" >&2
+    exit 1
+  fi
+  echo "OK: simbol $mod ada"
+done
+
 "$STRIP" "$OUT"
 chmod +x "$OUT"
 

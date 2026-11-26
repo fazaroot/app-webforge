@@ -30,12 +30,14 @@
 //!   bertanggung jawab atas file statisnya sendiri. Ini menghindari
 //!   routing ganda yang membingungkan (sebagian path dari disk, sebagian
 //!   dari backend).
-//! - Apache httpd: reverse proxy TIDAK didukung pada build v0.3.0
-//!   (mod_proxy tidak dikompilasi statis; lihat
-//!   scripts/native/build-apache.sh). [`generate_httpd_config`]
-//!   mengembalikan `Err` jujur bila `proxy_port` diminta, bukan config
-//!   yang diam-diam mengabaikan proxy. Pengguna yang butuh proxy Apache
-//!   bisa menyediakan `custom_config` sendiri.
+//! - Apache httpd v0.5.0: reverse proxy generik (`ProxyPass`) dan
+//!   PHP-FPM (`mod_proxy_fcgi` + `SetHandler proxy:fcgi://...`)
+//!   didukung; modul proxy dikompilasi statis oleh skrip native.
+//!   Validasi `httpd -t` tetap gerbang kejujuran: bila modul tidak ada
+//!   di binary, validasi gagal dan server tidak dimulai.
+//! - Mode PHP-FPM (`php_fpm_port`): Nginx memakai `fastcgi_pass`,
+//!   Caddy `php_fastcgi`, Apache `proxy:fcgi`. Port FPM terpisah dari
+//!   `proxy_port` generik; proxy eksplisit pengguna menang atas FPM.
 //! - Apache httpd berjalan dengan MPM yang men-spawn child process.
 //!   Core saat ini membunuh child langsung (SIGKILL ke proses induk);
 //!   koordinator harus memastikan child httpd ikut mati (mis. kill
@@ -60,6 +62,10 @@ pub struct WebServerInput {
     pub data_dir: PathBuf,
     pub server_id: String,
     pub proxy_port: Option<u16>,
+    /// Port PHP-FPM loopback untuk mode komposit PHP. Terpisah dari
+    /// `proxy_port` generik: FPM melayani file .php dari docroot,
+    /// sedangkan proxy meneruskan semua request ke backend HTTP.
+    pub php_fpm_port: Option<u16>,
     pub custom_config: Option<String>,
 }
 
@@ -132,12 +138,18 @@ pub fn generate_caddyfile(input: &WebServerInput) -> String {
     let home = server_home(&input.data_dir, &input.server_id, "caddy");
     let root = caddy_path(&input.doc_root);
     let storage = caddy_path(&home.join("caddy-data"));
-    let (handler, handler_comment) = match input.proxy_port {
-        Some(proxy_port) => (
+    let (handler, handler_comment) = match (input.proxy_port, input.php_fpm_port) {
+        (Some(proxy_port), _) => (
             format!("reverse_proxy 127.0.0.1:{}", proxy_port),
             "# Mode proxy: semua request diteruskan ke backend; file statis\n    # dilayani backend, bukan langsung dari disk oleh Caddy.\n    ",
         ),
-        None => ("file_server".to_string(), ""),
+        (None, Some(fpm_port)) => (
+            // php_fastcgi menangani file .php dan fallback index.php;
+            // file_server melayani aset statis dari docroot.
+            format!("php_fastcgi 127.0.0.1:{}\n    file_server", fpm_port),
+            "# Mode PHP-FPM: file .php dieksekusi PHP-FPM, aset statis\n    # dilayani langsung dari disk oleh Caddy.\n    ",
+        ),
+        (None, None) => ("file_server".to_string(), ""),
     };
     format!(
         "# Dihasilkan otomatis oleh WebForge Mobile — jangan edit manual.\n\
@@ -256,23 +268,63 @@ pub fn generate_nginx_config(input: &WebServerInput) -> String {
     let uwsgi_tmp = nginx_path(&tmp.join("uwsgi"));
     let scgi_tmp = nginx_path(&tmp.join("scgi"));
 
-    let location = match input.proxy_port {
-        Some(proxy_port) => format!(
-            "# Mode proxy: semua request diteruskan ke backend; file statis\n\
-             \x20           # dilayani backend, bukan langsung dari disk oleh Nginx.\n\
-             \x20           location / {{\n\
-             \x20               proxy_pass http://127.0.0.1:{proxy_port};\n\
-             \x20               proxy_set_header Host $host;\n\
-             \x20               proxy_set_header X-Real-IP $remote_addr;\n\
-             \x20               proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n\
-             \x20               proxy_set_header X-Forwarded-Proto $scheme;\n\
-             \x20           }}",
-            proxy_port = proxy_port,
+    let (index_directive, location) = match (input.proxy_port, input.php_fpm_port) {
+        (Some(proxy_port), _) => (
+            "index.html index.htm",
+            format!(
+                "# Mode proxy: semua request diteruskan ke backend; file statis\n\
+                 \x20           # dilayani backend, bukan langsung dari disk oleh Nginx.\n\
+                 \x20           location / {{\n\
+                 \x20               proxy_pass http://127.0.0.1:{proxy_port};\n\
+                 \x20               proxy_set_header Host $host;\n\
+                 \x20               proxy_set_header X-Real-IP $remote_addr;\n\
+                 \x20               proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n\
+                 \x20               proxy_set_header X-Forwarded-Proto $scheme;\n\
+                 \x20           }}",
+                proxy_port = proxy_port,
+            ),
         ),
-        None => "location / {\n\
-                 \x20               try_files $uri $uri/ =404;\n\
-                 \x20           }"
-            .to_string(),
+        (None, Some(fpm_port)) => (
+            "index.php index.html index.htm",
+            format!(
+                "# Mode PHP-FPM: file statis dari disk, request lain jatuh ke\n\
+                 \x20           # index.php (front controller), file .php ke PHP-FPM.\n\
+                 \x20           location / {{\n\
+                 \x20               try_files $uri $uri/ /index.php?$query_string;\n\
+                 \x20           }}\n\
+                 \n\
+                 \x20           location ~ \\.php$ {{\n\
+                 \x20               try_files $uri =404;\n\
+                 \x20               fastcgi_pass 127.0.0.1:{fpm_port};\n\
+                 \x20               fastcgi_index index.php;\n\
+                 \x20               fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n\
+                 \x20               fastcgi_param QUERY_STRING $query_string;\n\
+                 \x20               fastcgi_param REQUEST_METHOD $request_method;\n\
+                 \x20               fastcgi_param CONTENT_TYPE $content_type;\n\
+                 \x20               fastcgi_param CONTENT_LENGTH $content_length;\n\
+                 \x20               fastcgi_param SCRIPT_NAME $fastcgi_script_name;\n\
+                 \x20               fastcgi_param REQUEST_URI $request_uri;\n\
+                 \x20               fastcgi_param DOCUMENT_URI $document_uri;\n\
+                 \x20               fastcgi_param DOCUMENT_ROOT $document_root;\n\
+                 \x20               fastcgi_param SERVER_PROTOCOL $server_protocol;\n\
+                 \x20               fastcgi_param GATEWAY_INTERFACE CGI/1.1;\n\
+                 \x20               fastcgi_param SERVER_SOFTWARE nginx;\n\
+                 \x20               fastcgi_param REMOTE_ADDR $remote_addr;\n\
+                 \x20               fastcgi_param REMOTE_PORT $remote_port;\n\
+                 \x20               fastcgi_param SERVER_ADDR $server_addr;\n\
+                 \x20               fastcgi_param SERVER_PORT $server_port;\n\
+                 \x20               fastcgi_param SERVER_NAME $server_name;\n\
+                 \x20           }}",
+                fpm_port = fpm_port,
+            ),
+        ),
+        (None, None) => (
+            "index.html index.htm",
+            "location / {\n\
+             \x20               try_files $uri $uri/ =404;\n\
+             \x20           }"
+                .to_string(),
+        ),
     };
 
     format!(
@@ -305,7 +357,7 @@ pub fn generate_nginx_config(input: &WebServerInput) -> String {
          \x20       listen {addr};\n\
          \x20       server_name _;\n\
          \x20       root {root};\n\
-         \x20       index index.html index.htm;\n\
+         \x20       index {index_directive};\n\
          \n\
          \x20       {location}\n\
          \x20   }}\n\
@@ -320,20 +372,22 @@ pub fn generate_nginx_config(input: &WebServerInput) -> String {
         scgi_tmp = scgi_tmp,
         addr = addr,
         root = root,
+        index_directive = index_directive,
         location = location,
     )
 }
 
 /// Hasilkan konfigurasi Apache httpd untuk satu instance.
 ///
-/// Mengembalikan `Err` bila `proxy_port` diminta: build httpd WebForge
-/// v0.3.0 tidak mengompilasi mod_proxy (lihat
-/// scripts/native/build-apache.sh), jadi reverse proxy Apache tidak
-/// didukung dan tidak akan dipalsukan dengan config yang mengabaikan
-/// proxy. Modul yang dipakai config ini (mime, dir, log_config,
-/// authz_core, authz_host, authn_core, authz_user, unixd, setenvif,
-/// alias, rewrite, env, headers, reqtimeout) dikompilasi statis ke
-/// binary; karena itu tidak ada baris `LoadModule`.
+/// Mode proxy generik (`proxy_port`) memakai `ProxyPass`; mode PHP
+/// (`php_fpm_port`) memakai `mod_proxy_fcgi` dengan `SetHandler
+/// proxy:fcgi://127.0.0.1:<port>` pada `FilesMatch \.php$`. Modul
+/// yang dipakai config ini (mime, dir, log_config, authz_core,
+/// authz_host, authn_core, authz_user, unixd, setenvif, alias,
+/// rewrite, env, headers, reqtimeout, proxy, proxy_http, proxy_fcgi)
+/// dikompilasi statis ke binary; karena itu tidak ada baris
+/// `LoadModule`. Validasi `httpd -t` sebelum start memastikan modul
+/// proxy benar-benar ada di binary yang terpasang.
 ///
 /// `AllowOverride All` pada document root disengaja agar `.htaccess`
 /// (nilai khas Apache, mis. WordPress) berfungsi. Mutex memakai
@@ -341,12 +395,6 @@ pub fn generate_nginx_config(input: &WebServerInput) -> String {
 /// menyediakan SysV semaphore/POSIX named semaphore yang diasumsikan
 /// mekanisme bawaan APR di Linux desktop.
 pub fn generate_httpd_config(input: &WebServerInput) -> Result<String, String> {
-    if let Some(proxy_port) = input.proxy_port {
-        return Err(format!(
-            "Apache httpd WebForge v0.3.0 tidak mendukung reverse proxy (proxy_port {} diminta): mod_proxy tidak dikompilasi statis pada build ini. Gunakan Caddy atau Nginx untuk reverse proxy, atau sediakan custom_config Apache sendiri.",
-            proxy_port
-        ));
-    }
     let home = server_home(&input.data_dir, &input.server_id, "apache");
     let addr = format_host_port(&input.host, input.port);
     let server_root = apache_quoted(&home);
@@ -364,12 +412,37 @@ pub fn generate_httpd_config(input: &WebServerInput) -> Result<String, String> {
         format!("flock:{}", logs_dir)
     };
 
+    let (directory_index, backend_block) = match (input.proxy_port, input.php_fpm_port) {
+        (Some(proxy_port), _) => (
+            "index.html index.htm",
+            format!(
+                "# Mode proxy: semua request diteruskan ke backend HTTP.\n\
+                 ProxyRequests Off\n\
+                 ProxyPreserveHost On\n\
+                 ProxyPass \"/\" \"http://127.0.0.1:{proxy_port}/\"\n\
+                 ProxyPassReverse \"/\" \"http://127.0.0.1:{proxy_port}/\"\n",
+                proxy_port = proxy_port,
+            ),
+        ),
+        (None, Some(fpm_port)) => (
+            "index.php index.html index.htm",
+            format!(
+                "# Mode PHP-FPM: file .php dieksekusi PHP-FPM lewat mod_proxy_fcgi.\n\
+                 <FilesMatch \"\\.php$\">\n\
+                 \x20   SetHandler \"proxy:fcgi://127.0.0.1:{fpm_port}\"\n\
+                 </FilesMatch>\n",
+                fpm_port = fpm_port,
+            ),
+        ),
+        (None, None) => ("index.html index.htm", String::new()),
+    };
+
     Ok(format!(
         "# Dihasilkan otomatis oleh WebForge Mobile — jangan edit manual.\n\
          # Modul dikompilasi statis ke binary (tanpa LoadModule): mime, dir,\n\
          # log_config, authz_core, authz_host, authn_core, authz_user, unixd,\n\
          # setenvif, alias, rewrite, env, headers, reqtimeout, ssl,\n\
-         # socache_shmcb, watchdog.\n\
+         # socache_shmcb, watchdog, proxy, proxy_http, proxy_fcgi.\n\
          ServerRoot {server_root}\n\
          ServerName localhost\n\
          Listen {addr}\n\
@@ -421,8 +494,10 @@ pub fn generate_httpd_config(input: &WebServerInput) -> Result<String, String> {
          <VirtualHost *:{port}>\n\
          \x20   ServerName localhost\n\
          \x20   DocumentRoot {doc_root}\n\
-         \x20   DirectoryIndex index.html index.htm\n\
-         </VirtualHost>\n",
+         \x20   DirectoryIndex {directory_index}\n\
+         </VirtualHost>\n\
+         \n\
+         {backend_block}",
         server_root = server_root,
         addr = addr,
         pid_file = pid_file,
@@ -434,6 +509,8 @@ pub fn generate_httpd_config(input: &WebServerInput) -> Result<String, String> {
         mutex = mutex,
         doc_root = doc_root,
         port = input.port,
+        directory_index = directory_index,
+        backend_block = backend_block,
     ))
 }
 
@@ -586,8 +663,15 @@ mod tests {
             data_dir: PathBuf::from("/data/webforge"),
             server_id: "srv-1".to_string(),
             proxy_port,
+            php_fpm_port: None,
             custom_config: None,
         }
+    }
+
+    fn sample_input_fpm(fpm_port: u16) -> WebServerInput {
+        let mut input = sample_input(None);
+        input.php_fpm_port = Some(fpm_port);
+        input
     }
 
     fn temp_data_dir(name: &str) -> PathBuf {
@@ -783,10 +867,79 @@ mod tests {
     }
 
     #[test]
-    fn httpd_proxy_is_honest_error() {
-        let err = generate_httpd_config(&sample_input(Some(9000))).unwrap_err();
-        assert!(err.contains("tidak mendukung reverse proxy"), "err: {}", err);
-        assert!(err.contains("9000"), "err: {}", err);
+    fn httpd_proxy_has_proxy_pass() {
+        let text = generate_httpd_config(&sample_input(Some(9000))).unwrap();
+        assert!(text.contains("ProxyRequests Off"), "httpd: {}", text);
+        assert!(
+            text.contains("ProxyPass \"/\" \"http://127.0.0.1:9000/\""),
+            "httpd: {}",
+            text
+        );
+        assert!(
+            text.contains("ProxyPassReverse \"/\" \"http://127.0.0.1:9000/\""),
+            "httpd: {}",
+            text
+        );
+    }
+
+    #[test]
+    fn httpd_fpm_has_fcgi_handler_and_php_index() {
+        let text = generate_httpd_config(&sample_input_fpm(19001)).unwrap();
+        assert!(
+            text.contains("DirectoryIndex index.php index.html"),
+            "httpd: {}",
+            text
+        );
+        assert!(text.contains("<FilesMatch \"\\.php$\">"), "httpd: {}", text);
+        assert!(
+            text.contains("SetHandler \"proxy:fcgi://127.0.0.1:19001\""),
+            "httpd: {}",
+            text
+        );
+        assert!(!text.contains("ProxyPass"), "httpd: {}", text);
+    }
+
+    #[test]
+    fn nginx_fpm_has_fastcgi_and_front_controller() {
+        let text = generate_nginx_config(&sample_input_fpm(19001));
+        assert!(text.contains("index index.php index.html"), "nginx: {}", text);
+        assert!(
+            text.contains("try_files $uri $uri/ /index.php?$query_string;"),
+            "nginx: {}",
+            text
+        );
+        assert!(text.contains("location ~ \\.php$"), "nginx: {}", text);
+        assert!(
+            text.contains("fastcgi_pass 127.0.0.1:19001;"),
+            "nginx: {}",
+            text
+        );
+        assert!(
+            text.contains("fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;"),
+            "nginx: {}",
+            text
+        );
+        assert!(!text.contains("proxy_pass"), "nginx: {}", text);
+    }
+
+    #[test]
+    fn caddy_fpm_has_php_fastcgi_and_file_server() {
+        let text = generate_caddyfile(&sample_input_fpm(19001));
+        assert!(text.contains("php_fastcgi 127.0.0.1:19001"), "caddyfile: {}", text);
+        assert!(text.contains("file_server"), "caddyfile: {}", text);
+        assert!(!text.contains("reverse_proxy"), "caddyfile: {}", text);
+    }
+
+    #[test]
+    fn proxy_wins_over_fpm() {
+        let mut input = sample_input(Some(9000));
+        input.php_fpm_port = Some(19001);
+        let nginx = generate_nginx_config(&input);
+        assert!(nginx.contains("proxy_pass http://127.0.0.1:9000;"), "nginx: {}", nginx);
+        assert!(!nginx.contains("fastcgi_pass"), "nginx: {}", nginx);
+        let caddy = generate_caddyfile(&input);
+        assert!(caddy.contains("reverse_proxy 127.0.0.1:9000"), "caddyfile: {}", caddy);
+        assert!(!caddy.contains("php_fastcgi"), "caddyfile: {}", caddy);
     }
 
     #[test]
@@ -911,13 +1064,9 @@ mod tests {
 
         let mut proxied = sample_input(Some(9000));
         proxied.data_dir = data_dir.clone();
-        let err = write_config(&proxied, "apache").unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-        assert!(
-            err.to_string().contains("tidak mendukung reverse proxy"),
-            "err: {}",
-            err
-        );
+        let path = write_config(&proxied, "apache").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("ProxyPass"), "httpd: {}", text);
         std::fs::remove_dir_all(&data_dir).ok();
     }
 }

@@ -83,12 +83,12 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-full bg-appbg dark:bg-darkbg text-ink dark:text-darkink flex flex-col">
-      <header className="app-header sticky top-0 z-30 bg-primary text-white px-4 pb-3 flex items-center gap-3 shadow">
+    <div className="wf-app min-h-full text-ink dark:text-darkink flex flex-col">
+      <header className="app-header wf-header sticky top-0 z-30 text-white px-4 pb-3 flex items-center gap-3">
         <button type="button" aria-label="Buka menu" onClick={() => setDrawerOpen(true)} className="p-1"><Menu size={22} /></button>
         <div className="min-w-0">
           <p className="font-bold leading-tight">WebForge Mobile</p>
-          <p className="text-xs opacity-90 leading-tight">{active?.label}</p>
+          <p className="text-xs opacity-95 leading-tight">Faza X TCP · {active?.label}</p>
         </div>
         <button
           type="button"
@@ -107,9 +107,12 @@ export default function App() {
       {drawerOpen && (
         <div className="fixed inset-0 z-40">
           <button type="button" aria-label="Tutup menu" className="absolute inset-0 bg-black/50" onClick={() => setDrawerOpen(false)} />
-          <nav className="drawer-top absolute left-0 top-0 bottom-0 w-64 bg-surface dark:bg-darksurface shadow-xl px-3 pb-4 overflow-auto">
+          <nav className="drawer-top wf-drawer absolute left-0 top-0 bottom-0 w-64 shadow-xl px-3 pb-4 overflow-auto">
             <div className="flex items-center justify-between mb-3">
-              <p className="font-bold">WebForge Mobile</p>
+              <div>
+                <p className="font-bold">WebForge Mobile</p>
+                <p className="text-xs text-slate-700 dark:text-slate-300">Faza X TCP</p>
+              </div>
               <button type="button" aria-label="Tutup" onClick={() => setDrawerOpen(false)} className="p-1"><X size={20} /></button>
             </div>
             <div className="space-y-1">
@@ -154,7 +157,7 @@ export default function App() {
         </>)}
       </main>
 
-      <nav className="bottom-nav fixed bottom-0 left-0 right-0 z-30 bg-surface dark:bg-darksurface border-t border-slate-200 dark:border-slate-700">
+      <nav className="bottom-nav wf-bottom-nav fixed bottom-0 left-0 right-0 z-30">
         <div className="max-w-3xl mx-auto grid grid-cols-5">
           {BOTTOM.map((id) => {
             const s = SECTIONS.find((x) => x.id === id) as { id: Section; label: string; icon: typeof LayoutDashboard };

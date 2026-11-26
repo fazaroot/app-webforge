@@ -482,6 +482,7 @@ async fn run_http_engine(
                 data_dir: paths.base.clone(),
                 server_id: format!("selftest-{}", engine),
                 proxy_port: None,
+                php_fpm_port: None,
                 custom_config: None,
             };
             let config_path = crate::webservers::write_config(&input, engine)
