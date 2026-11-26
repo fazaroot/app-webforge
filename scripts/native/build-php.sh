@@ -578,6 +578,10 @@ package_binary() {
   for lib in $("$READELF" -d "$out" | grep NEEDED | sed -E 's/.*\[(.*)\]/\1/' || true); do
     case "$lib" in
       libc.so|libm.so|libdl.so|libz.so|liblog.so) ;;
+      # libc++_shared.so terpaket di APK (untuk Node) dan core mengatur
+      # LD_LIBRARY_PATH ke nativeLibraryDir saat spawn, jadi PHP/intl
+      # menemukannya saat runtime.
+      libc++_shared.so) ;;
       *)
         echo "::error::Dependensi dinamis tak terduga pada $out: $lib (dependensi harus statis)" >&2
         exit 1
