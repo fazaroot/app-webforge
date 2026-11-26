@@ -22,7 +22,7 @@ pub mod jni_bridge;
 
 use config::Config;
 use state::AppState;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -65,11 +65,15 @@ async fn build_state(config: Config) -> Result<AppState, Box<dyn std::error::Err
         php_info_cache: Arc::new(Mutex::new(None)),
         runtime_cache: Arc::new(runtime::RuntimeCache::new()),
         process_stderr: Arc::new(Mutex::new(HashMap::new())),
+        log_tail_tasks: Arc::new(Mutex::new(HashMap::new())),
+        log_tail_offsets: Arc::new(Mutex::new(HashMap::new())),
+        health_restarting: Arc::new(Mutex::new(HashSet::new())),
     };
     // Probe runtime sekali saat core start; hasilnya masuk cache TTL
     // 60 detik dan tabel runtime_versions.
     let _ = runtime::sync_runtime_table(&state, false).await;
     monitoring::spawn_sampler(state.pool.clone(), state.config.workspace_dir.clone());
+    process::spawn_health_supervisor(state.clone());
     Ok(state)
 }
 

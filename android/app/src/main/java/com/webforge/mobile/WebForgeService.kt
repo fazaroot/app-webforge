@@ -45,6 +45,13 @@ class WebForgeService : Service() {
     /** WakeLock parsial; dibuat sekali di onCreate, tidak reference-counted. */
     private var wakeLock: PowerManager.WakeLock? = null
 
+    /**
+     * Keadaan server aktif terakhir yang diketahui dari cek /api/servers
+     * yang berhasil. Dipakai saat cek berikutnya gagal sesaat agar
+     * WakeLock tidak lepas hanya karena satu kegagalan transien.
+     */
+    private var lastKnownActiveServer = false
+
     /** Penjadwal pemeriksaan WakeLock (15 dtk) dan watchdog (30 dtk). */
     private var scheduler: ScheduledExecutorService? = null
 
@@ -203,9 +210,24 @@ class WebForgeService : Service() {
             releaseWakeLock()
             return
         }
-        val shouldHold = readKeepCpuAwake(applicationContext) &&
-            CoreBridge.started &&
-            hasRunningServer()
+        if (!readKeepCpuAwake(applicationContext)) {
+            releaseWakeLock()
+            return
+        }
+        val active = activeServerState()
+        val shouldHold = when {
+            active != null -> {
+                lastKnownActiveServer = active
+                active
+            }
+            watchdogGaveUp -> false
+            else -> {
+                if (lastKnownActiveServer) {
+                    Log.w(TAG, "Cek /api/servers gagal sesaat; WakeLock dipertahankan dari keadaan terakhir")
+                }
+                lastKnownActiveServer
+            }
+        }
         // Periksa ulang stopping: STOP bisa tiba selama pemeriksaan HTTP.
         if (shouldHold && !stopping) {
             wakeLock?.acquire(WAKELOCK_TIMEOUT_MS)
@@ -226,15 +248,16 @@ class WebForgeService : Service() {
     /**
      * Memeriksa GET /api/servers pada management API (127.0.0.1:8765)
      * dengan header X-API-Key berisi token core (CoreBridge.token()
-     * meneruskan nativeGetToken()). Respons berupa array ServerInstance;
-     * server dianggap berjalan hanya bila ada yang status-nya "running".
-     * Bila API tidak terjangkau atau token kosong, hasilnya false —
-     * WakeLock dilepas dan watchdog yang menangani core yang bermasalah.
+     * meneruskan nativeGetToken()). Mengembalikan true bila ada server
+     * starting/running/degraded, false bila cek berhasil dan tidak ada
+     * server aktif, dan null bila keadaan tidak diketahui (core belum
+     * siap, token kosong, HTTP gagal, atau respons tidak terbaca).
+     * Nilai null tidak boleh melepas WakeLock sendirian.
      */
-    private fun hasRunningServer(): Boolean {
-        if (!CoreBridge.started) return false
+    private fun activeServerState(): Boolean? {
+        if (!CoreBridge.started) return null
         val token = CoreBridge.token()
-        if (token.isEmpty()) return false
+        if (token.isEmpty()) return null
         return try {
             val connection = (URL("${CoreBridge.API_BASE}/api/servers").openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
@@ -244,25 +267,26 @@ class WebForgeService : Service() {
             }
             try {
                 if (connection.responseCode != HttpURLConnection.HTTP_OK) {
-                    false
+                    null
                 } else {
                     val body = connection.inputStream.bufferedReader().use { it.readText() }
                     val servers = JSONArray(body)
-                    var running = false
+                    var active = false
                     for (i in 0 until servers.length()) {
-                        if (servers.getJSONObject(i).optString("status") == "running") {
-                            running = true
+                        val status = servers.getJSONObject(i).optString("status")
+                        if (status == "starting" || status == "running" || status == "degraded") {
+                            active = true
                             break
                         }
                     }
-                    running
+                    active
                 }
             } finally {
                 connection.disconnect()
             }
         } catch (e: Exception) {
             Log.w(TAG, "Gagal memeriksa /api/servers: ${e.message}")
-            false
+            null
         }
     }
 

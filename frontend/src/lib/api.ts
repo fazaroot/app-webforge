@@ -1,7 +1,7 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import type {
   ActionOutput, BackupResult, CoreStatus, CreateDatabaseBody, CreateServerBody, DatabaseInfo, Diagnostics, DirSize, FileEntry, FileRead, FileSearchHit,
-  FrameworkInfo, GitStatus, Health, LogEntry, MonitoringCurrent, MonitoringPoint, NetworkInfo,
+  FrameworkInfo, GitStatus, Health, LanTestResult, LogEntry, MonitoringCurrent, MonitoringPoint, NetworkInfo,
   NodeProjectInfo, PhpCliResult, PhpRuntimeInfo, PhpSettings, PowerStatus, PythonProjectInfo, PythonRuntimeInfo,
   Project, QueryResult, RuntimeInfo, RuntimeTestResult, SecurityStatus, SelfTestResponse, ServerConfig, ServerInstance, ServerLog, SettingsMap,
   StartupLogEntry, SystemInfo, TableInfo, TerminalHistoryItem, TerminalResult, TestConnectionResult, ValidateConfigResult,
@@ -238,6 +238,7 @@ export const api = {
   stopServer: (id: string) => request<ServerInstance>(`/api/servers/${id}/stop`, { method: 'POST' }),
   restartServer: (id: string) => request<ServerInstance>(`/api/servers/${id}/restart`, { method: 'POST' }),
   reloadServer: (id: string) => request<ServerInstance>(`/api/servers/${id}/reload`, { method: 'POST' }),
+  testLan: (id: string) => request<LanTestResult>(`/api/servers/${id}/test-lan`, { method: 'POST' }),
   serverLogs: (id: string, limit = 200) => request<ServerLog[]>(`/api/servers/${id}/logs${qs({ limit })}`),
   serverConfig: (id: string) => request<ServerConfig>(`/api/servers/${id}/config`),
   putServerConfig: (id: string, configText: string) =>

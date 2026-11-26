@@ -119,6 +119,16 @@ describe('api client', () => {
     expect((fetchMock.mock.calls[9] as unknown as [string])[0]).toContain('/api/projects/p1/node/install');
   });
 
+  it('memanggil endpoint Tes Akses LAN v0.4.0 sesuai kontrak', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ ok: true, status_code: 200, duration_ms: 9 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await api.testLan('srv-1');
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toContain('/api/servers/srv-1/test-lan');
+    expect(init.method).toBe('POST');
+    expect(result).toEqual({ ok: true, status_code: 200, duration_ms: 9 });
+  });
+
   it('memanggil endpoint database v0.3.0 (tes koneksi, start/stop, kind eksternal) sesuai kontrak', async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ ok: true, message: 'ok' }));
     vi.stubGlobal('fetch', fetchMock);

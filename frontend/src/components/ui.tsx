@@ -79,6 +79,7 @@ export const btnDanger =
 export function StatusPill({ status }: { status: string }) {
   const map: Record<string, string> = {
     running: 'bg-success/15 text-success',
+    degraded: 'bg-warning/15 text-warning',
     stopped: 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300',
     starting: 'bg-warning/15 text-warning',
     stopping: 'bg-warning/15 text-warning',
@@ -92,7 +93,7 @@ export function StatusPill({ status }: { status: string }) {
     unavailable: 'bg-warning/15 text-warning',
   };
   const label: Record<string, string> = {
-    running: 'Berjalan', stopped: 'Berhenti', starting: 'Memulai…', stopping: 'Menghentikan…', error: 'Error',
+    running: 'Berjalan', degraded: 'Degraded', stopped: 'Berhenti', starting: 'Memulai…', stopping: 'Menghentikan…', error: 'Error',
     ready: 'Siap', connected: 'Terhubung', disconnected: 'Terputus', available: 'Tersedia', unavailable: 'Tidak tersedia',
   };
   return (

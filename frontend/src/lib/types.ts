@@ -6,7 +6,8 @@ export interface Diagnostics { generated_at: string; checks: DiagnosticCheck[]; 
 export interface FrameworkInfo { framework: string; language: string; version: string | null; recommended_runtime: string; recommended_document_root: string; readiness: string; notes: string[]; detected_files: string[] }
 export interface Project { id: string; name: string; slug: string; path: string; document_root: string; created_at: string; updated_at: string; framework: FrameworkInfo | null }
 export type ServerEngine = 'static' | 'php' | 'caddy' | 'nginx' | 'apache' | 'python' | 'node';
-export interface ServerInstance { id: string; project_id: string; project_name: string; engine: string; port: number; bind_lan: boolean; document_root: string; status: 'stopped' | 'starting' | 'running' | 'stopping' | 'error'; pid: number | null; started_at: string | null; uptime_seconds: number; url_local: string; url_lan: string | null; error_message: string | null; in_process?: boolean; config_text: string | null; proxy_port: number | null; command: string | null }
+export interface ServerInstance { id: string; project_id: string; project_name: string; engine: string; port: number; bind_lan: boolean; document_root: string; status: 'stopped' | 'starting' | 'running' | 'degraded' | 'stopping' | 'error'; pid: number | null; started_at: string | null; uptime_seconds: number; url_local: string; url_lan: string | null; error_message: string | null; in_process?: boolean; config_text: string | null; proxy_port: number | null; command: string | null; backend_port?: number | null; warning_message?: string | null; last_health_at?: string | null; last_health_status?: number | null; last_health_error?: string | null; last_health_target?: string | null; health_failures?: number; auto_restart_count?: number }
+export interface LanTestResult { ok: boolean; url: string | null; host: string | null; port: number; status_code: number | null; duration_ms: number; target: string | null; error: string | null; warning: string | null }
 export interface CreateServerBody { project_id: string; engine: string; port: number; bind_lan: boolean; document_root?: string; proxy_port?: number | null; command?: string | null }
 export interface ServerConfig { engine: string; config_text: string; generated_config: string; config_path: string; editable: boolean }
 export interface ValidateConfigResult { valid: boolean; output: string }
@@ -41,7 +42,7 @@ export interface NodeProjectInfo { package_json_exists: boolean; scripts: Record
 export interface ActionOutput { ok: boolean; output: string }
 export interface PowerStatus { ignoringBatteryOptimizations: boolean; keepCpuAwake: boolean }
 export interface RuntimeTestResult { id: string; ok: boolean; version: string | null; stdout: string; stderr: string; exit_code: number | null; duration_ms: number; error: string | null }
-export interface SelfTestEngineResult { engine: string; ok: boolean; duration_ms: number; detail: string; error: string | null }
+export interface SelfTestEngineResult { engine: string; ok: boolean; duration_ms: number; detail: string; error: string | null; lan_ok?: boolean | null; lan_detail?: string | null; lan_error?: string | null }
 export interface SelfTestResponse { results: SelfTestEngineResult[] }
 export type CoreStartupState = 'starting' | 'ready' | 'error';
 export interface CoreStatus { startupState: string | null; assetState: string | null; loadError: string | null }

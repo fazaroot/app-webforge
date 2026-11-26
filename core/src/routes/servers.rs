@@ -28,6 +28,14 @@ pub struct ServerOut {
     pub config_text: Option<String>,
     pub proxy_port: Option<i64>,
     pub command: Option<String>,
+    pub backend_port: Option<i64>,
+    pub warning_message: Option<String>,
+    pub last_health_at: Option<String>,
+    pub last_health_status: Option<i64>,
+    pub last_health_error: Option<String>,
+    pub last_health_target: Option<String>,
+    pub health_failures: i64,
+    pub auto_restart_count: i64,
 }
 
 pub fn server_out(row: &sqlx::sqlite::SqliteRow) -> ServerOut {
@@ -35,7 +43,7 @@ pub fn server_out(row: &sqlx::sqlite::SqliteRow) -> ServerOut {
     let bind_lan: bool = row.get::<i64, _>("bind_lan") != 0;
     let status: String = row.get("status");
     let started_at: Option<String> = row.get("started_at");
-    let uptime = if status == "running" {
+    let uptime = if status == "running" || status == "degraded" {
         started_at
             .as_ref()
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
@@ -49,6 +57,37 @@ pub fn server_out(row: &sqlx::sqlite::SqliteRow) -> ServerOut {
     } else {
         None
     };
+    let stored_warning: Option<String> = row.try_get("warning_message").ok().flatten();
+    let warning_message = stored_warning.or_else(|| {
+        let project_path: String = row.try_get("project_path").unwrap_or_default();
+        if project_path.is_empty() {
+            return None;
+        }
+        let document_root: String = row.get("document_root");
+        let doc_root = crate::util::resolve_inside(
+            &std::path::PathBuf::from(&project_path),
+            &document_root,
+            true,
+        )
+        .ok()?;
+        let effective_proxy = row
+            .try_get::<Option<i64>, _>("proxy_port")
+            .ok()
+            .flatten()
+            .and_then(|p| u16::try_from(p).ok())
+            .or_else(|| {
+                row.try_get::<Option<i64>, _>("backend_port")
+                    .ok()
+                    .flatten()
+                    .and_then(|p| u16::try_from(p).ok())
+            });
+        crate::process::docroot_warning(
+            &row.get::<String, _>("engine"),
+            &std::path::PathBuf::from(project_path),
+            &doc_root,
+            effective_proxy,
+        )
+    });
     ServerOut {
         id: row.get("id"),
         project_id: row.get("project_id"),
@@ -68,10 +107,18 @@ pub fn server_out(row: &sqlx::sqlite::SqliteRow) -> ServerOut {
         config_text: row.try_get("config_text").ok().flatten(),
         proxy_port: row.try_get("proxy_port").ok().flatten(),
         command: row.try_get("command").ok().flatten(),
+        backend_port: row.try_get("backend_port").ok().flatten(),
+        warning_message,
+        last_health_at: row.try_get("last_health_at").ok().flatten(),
+        last_health_status: row.try_get("last_health_status").ok().flatten(),
+        last_health_error: row.try_get("last_health_error").ok().flatten(),
+        last_health_target: row.try_get("last_health_target").ok().flatten(),
+        health_failures: row.try_get("health_failures").unwrap_or(0),
+        auto_restart_count: row.try_get("auto_restart_count").unwrap_or(0),
     }
 }
 
-const SERVER_SELECT: &str = "SELECT s.*, p.name AS project_name FROM server_instances s JOIN projects p ON p.id = s.project_id";
+const SERVER_SELECT: &str = "SELECT s.*, p.name AS project_name, p.path AS project_path FROM server_instances s JOIN projects p ON p.id = s.project_id";
 
 pub async fn get_server_row(pool: &sqlx::SqlitePool, id: &str) -> ApiResult<sqlx::sqlite::SqliteRow> {
     sqlx::query(&format!("{} WHERE s.id=?1", SERVER_SELECT))
@@ -136,8 +183,35 @@ pub async fn create_server(
     let default_docroot: String = project.get("document_root");
     let document_root = body.document_root.unwrap_or(default_docroot);
     // validate docroot inside project
-    crate::util::resolve_inside(&std::path::PathBuf::from(&project_path), &document_root, true)
-        .map_err(|e| ApiError::bad_request(format!("Document root tidak valid: {}", e.message)))?;
+    let doc_root = crate::util::resolve_inside(
+        &std::path::PathBuf::from(&project_path),
+        &document_root,
+        true,
+    )
+    .map_err(|e| ApiError::bad_request(format!("Document root tidak valid: {}", e.message)))?;
+    if body.engine == "apache" && body.proxy_port.is_some() {
+        return Err(ApiError::bad_request(
+            "Apache httpd WebForge tidak mendukung reverse proxy: mod_proxy tidak dikompilasi. Gunakan Caddy atau Nginx untuk reverse proxy",
+        ));
+    }
+    if body.engine == "apache"
+        && crate::process::is_php_project(&std::path::PathBuf::from(&project_path), &doc_root)
+    {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Apache+PHP tidak tersedia di WebForge: index.php tidak akan dieksekusi oleh Apache. Gunakan engine PHP, Nginx, atau Caddy",
+        ));
+    }
+    if matches!(body.engine.as_str(), "nginx" | "caddy")
+        && body.proxy_port.is_none()
+        && crate::process::is_php_project(&std::path::PathBuf::from(&project_path), &doc_root)
+        && crate::php::find_php_binary(state.native_lib_dir.as_deref()).is_none()
+    {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Mode komposit PHP membutuhkan runtime PHP untuk backend php -S internal, tetapi PHP tidak tersedia",
+        ));
+    }
     let id = new_id();
     let now = now_iso();
     sqlx::query(
@@ -167,7 +241,7 @@ pub async fn get_server(State(state): State<AppState>, Path(id): Path<String>) -
 pub async fn delete_server(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let row = get_server_row(&state.pool, &id).await?;
     let status: String = row.get("status");
-    if status == "running" || status == "starting" {
+    if matches!(status.as_str(), "running" | "degraded" | "starting" | "stopping") {
         return Err(ApiError::conflict("Server harus dihentikan sebelum dihapus"));
     }
     sqlx::query("DELETE FROM server_instances WHERE id=?1")
@@ -190,6 +264,9 @@ fn to_server_row(row: &sqlx::sqlite::SqliteRow) -> ServerRow {
         config_text: row.try_get("config_text").ok().flatten(),
         proxy_port: row.try_get("proxy_port").ok().flatten(),
         command: row.try_get("command").ok().flatten(),
+        backend_port: row.try_get("backend_port").ok().flatten(),
+        health_failures: row.try_get("health_failures").unwrap_or(0),
+        auto_restart_count: row.try_get("auto_restart_count").unwrap_or(0),
     }
 }
 
@@ -218,7 +295,7 @@ pub async fn stop(State(state): State<AppState>, Path(id): Path<String>) -> ApiR
 pub async fn restart(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let row = get_server_row(&state.pool, &id).await?;
     let status: String = row.get("status");
-    if status == "running" || status == "starting" {
+    if matches!(status.as_str(), "running" | "degraded" | "starting") {
         stop_server(&state, &id).await;
     }
     let row = get_server_row(&state.pool, &id).await?;
@@ -228,6 +305,13 @@ pub async fn restart(State(state): State<AppState>, Path(id): Path<String>) -> A
     let _ = start_server(&state, &server, &project_path).await;
     let row = get_server_row(&state.pool, &id).await?;
     Ok(Json(serde_json::to_value(server_out(&row)).unwrap()))
+}
+
+pub async fn test_lan(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    let row = get_server_row(&state.pool, &id).await?;
+    let server = to_server_row(&row);
+    let result = crate::process::test_lan_access(&state, &server).await;
+    Ok(Json(serde_json::to_value(result).unwrap()))
 }
 
 #[derive(Deserialize)]
@@ -308,13 +392,21 @@ async fn server_and_project_path(
     Ok((server, project.get::<String, _>("path")))
 }
 
-fn generated_config(state: &AppState, server: &ServerRow, project_path: &str) -> ApiResult<String> {
+async fn generated_config(state: &AppState, server: &ServerRow, project_path: &str) -> ApiResult<String> {
     let doc_root = crate::util::resolve_inside(
         &std::path::PathBuf::from(project_path),
         &server.document_root,
         true,
     )
     .map_err(|e| ApiError::bad_request(e.message))?;
+    let proxy_port = crate::process::effective_proxy_port(
+        state,
+        server,
+        &std::path::PathBuf::from(project_path),
+        &doc_root,
+        true,
+    )
+    .await;
     let input = crate::webservers::WebServerInput {
         host: if server.bind_lan { "0.0.0.0".to_string() } else { "127.0.0.1".to_string() },
         port: server.port as u16,
@@ -322,7 +414,7 @@ fn generated_config(state: &AppState, server: &ServerRow, project_path: &str) ->
         project_path: std::path::PathBuf::from(project_path),
         data_dir: state.config.data_dir.clone(),
         server_id: server.id.clone(),
-        proxy_port: server.proxy_port.and_then(|p| u16::try_from(p).ok()),
+        proxy_port,
         custom_config: None,
     };
     match server.engine.as_str() {
@@ -341,7 +433,7 @@ pub async fn get_config(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let (server, project_path) = server_and_project_path(&state, &id).await?;
-    let generated = generated_config(&state, &server, &project_path)?;
+    let generated = generated_config(&state, &server, &project_path).await?;
     let out = config_out(
         &state,
         &server,
@@ -357,7 +449,7 @@ pub async fn put_config(
     Json(body): Json<PutConfigBody>,
 ) -> ApiResult<Json<Value>> {
     let (server, project_path) = server_and_project_path(&state, &id).await?;
-    let generated = generated_config(&state, &server, &project_path)?;
+    let generated = generated_config(&state, &server, &project_path).await?;
     sqlx::query("UPDATE server_instances SET config_text=?1, updated_at=?2 WHERE id=?3")
         .bind(&body.config_text)
         .bind(now_iso())

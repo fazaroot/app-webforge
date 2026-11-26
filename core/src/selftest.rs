@@ -28,6 +28,9 @@ pub struct SelfTestResult {
     pub duration_ms: u64,
     pub detail: String,
     pub error: Option<String>,
+    pub lan_ok: Option<bool>,
+    pub lan_detail: Option<String>,
+    pub lan_error: Option<String>,
 }
 
 /// Urutan engine self-test (id runtime yang sama dengan /api/runtimes).
@@ -42,6 +45,9 @@ fn ok_result(engine: &str, duration_ms: u64, detail: String) -> SelfTestResult {
         duration_ms,
         detail,
         error: None,
+        lan_ok: None,
+        lan_detail: None,
+        lan_error: None,
     }
 }
 
@@ -52,6 +58,39 @@ fn fail_result(engine: &str, duration_ms: u64, detail: String, error: String) ->
         duration_ms,
         detail,
         error: Some(error),
+        lan_ok: None,
+        lan_detail: None,
+        lan_error: None,
+    }
+}
+
+struct EngineOutcome {
+    detail: String,
+    error: Option<String>,
+    lan_ok: Option<bool>,
+    lan_detail: Option<String>,
+    lan_error: Option<String>,
+}
+
+impl EngineOutcome {
+    fn ok(detail: String) -> Self {
+        Self {
+            detail,
+            error: None,
+            lan_ok: None,
+            lan_detail: None,
+            lan_error: None,
+        }
+    }
+
+    fn err(error: String) -> Self {
+        Self {
+            detail: String::new(),
+            error: Some(error),
+            lan_ok: None,
+            lan_detail: None,
+            lan_error: None,
+        }
     }
 }
 
@@ -81,22 +120,22 @@ pub fn selftest_python_script(marker: &str) -> String {
          \x20       self.wfile.write(body)\n\
          \x20   def log_message(self, *args):\n\
          \x20       pass\n\
-         http.server.HTTPServer(('127.0.0.1', int(os.environ.get('PORT', '0'))), Handler).serve_forever()\n",
+         http.server.HTTPServer((os.environ.get('HOST', '127.0.0.1'), int(os.environ.get('PORT', '0'))), Handler).serve_forever()\n",
         marker
     )
 }
 
 /// Skrip server Node minimal. Port ditulis literal karena NodeService
 /// Android tidak meneruskan environment ke proses :node.
-pub fn selftest_node_script(marker: &str, port: u16) -> String {
+pub fn selftest_node_script(marker: &str, port: u16, host: &str) -> String {
     format!(
         "const http = require('http');\n\
          const marker = {:?};\n\
          http.createServer((req, res) => {{\n\
          \x20 res.writeHead(200, {{ 'Content-Type': 'text/html' }});\n\
          \x20 res.end(marker);\n\
-         }}).listen({}, '127.0.0.1');\n",
-        marker, port
+         }}).listen({}, {:?});\n",
+        marker, port, host
     )
 }
 
@@ -109,10 +148,10 @@ pub struct SelfTestLaunch {
     pub envs: Vec<(String, String)>,
 }
 
-pub fn php_launch(binary: &Path, port: u16, docroot: &Path, ini_path: &Path) -> SelfTestLaunch {
+pub fn php_launch(binary: &Path, host: &str, port: u16, docroot: &Path, ini_path: &Path) -> SelfTestLaunch {
     SelfTestLaunch {
         program: binary.to_path_buf(),
-        args: crate::php::build_php_server_args("127.0.0.1", port, docroot, ini_path),
+        args: crate::php::build_php_server_args(host, port, docroot, ini_path),
         cwd: docroot.to_path_buf(),
         envs: vec![(
             "PHPRC".to_string(),
@@ -144,9 +183,9 @@ pub fn webserver_launch(engine: &str, binary: &Path, config_path: &Path, home: &
     }
 }
 
-pub fn python_launch(binary: &Path, script_path: &Path, port: u16, extra_envs: Vec<(String, String)>) -> SelfTestLaunch {
+pub fn python_launch(binary: &Path, script_path: &Path, host: &str, port: u16, extra_envs: Vec<(String, String)>) -> SelfTestLaunch {
     let mut envs = extra_envs;
-    envs.push(("HOST".to_string(), "127.0.0.1".to_string()));
+    envs.push(("HOST".to_string(), host.to_string()));
     envs.push(("PORT".to_string(), port.to_string()));
     SelfTestLaunch {
         program: binary.to_path_buf(),
@@ -159,7 +198,7 @@ pub fn python_launch(binary: &Path, script_path: &Path, port: u16, extra_envs: V
     }
 }
 
-pub fn node_launch(binary: &Path, script_path: &Path, port: u16) -> SelfTestLaunch {
+pub fn node_launch(binary: &Path, script_path: &Path, host: &str, port: u16) -> SelfTestLaunch {
     SelfTestLaunch {
         program: binary.to_path_buf(),
         args: vec![script_path.to_string_lossy().to_string()],
@@ -168,7 +207,7 @@ pub fn node_launch(binary: &Path, script_path: &Path, port: u16) -> SelfTestLaun
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from(".")),
         envs: vec![
-            ("HOST".to_string(), "127.0.0.1".to_string()),
+            ("HOST".to_string(), host.to_string()),
             ("PORT".to_string(), port.to_string()),
         ],
     }
@@ -183,9 +222,9 @@ fn free_port() -> Result<u16, String> {
         .map_err(|e| e.to_string())
 }
 
-async fn http_get(port: u16) -> Option<String> {
+async fn http_get(host: &str, port: u16) -> Option<String> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let addr = format!("127.0.0.1:{}", port);
+    let addr = format!("{}:{}", host, port);
     let mut stream = match tokio::time::timeout(
         Duration::from_millis(800),
         tokio::net::TcpStream::connect(&addr),
@@ -195,11 +234,11 @@ async fn http_get(port: u16) -> Option<String> {
         Ok(Ok(s)) => s,
         _ => return None,
     };
-    if stream
-        .write_all(b"GET / HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-        .await
-        .is_err()
-    {
+    let request = format!(
+        "GET / HTTP/1.0\r\nHost: {}:{}\r\nConnection: close\r\n\r\n",
+        host, port
+    );
+    if stream.write_all(request.as_bytes()).await.is_err() {
         return None;
     }
     let mut buf = Vec::new();
@@ -286,6 +325,7 @@ async fn tail_text(tail: &Arc<Mutex<VecDeque<String>>>) -> String {
 /// Tunggu marker muncul di respons HTTP; proses yang keluar lebih dulu
 /// atau timeout menghasilkan error dengan ekor output proses.
 async fn wait_marker(
+    host: &str,
     port: u16,
     marker: &str,
     timeout: Duration,
@@ -306,7 +346,7 @@ async fn wait_marker(
                 ));
             }
         }
-        if let Some(body) = http_get(port).await {
+        if let Some(body) = http_get(host, port).await {
             if body.contains(marker) {
                 return Ok(());
             }
@@ -379,18 +419,29 @@ struct EnginePaths {
     dir: PathBuf,
 }
 
-async fn run_static(state: &AppState, paths: &EnginePaths, marker: &str) -> Result<String, String> {
+async fn run_static(
+    state: &AppState,
+    paths: &EnginePaths,
+    marker: &str,
+    bind_host: &str,
+    probe_host: &str,
+) -> Result<String, String> {
     let _ = state;
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+    let listener = tokio::net::TcpListener::bind((bind_host, 0))
         .await
         .map_err(|e| format!("Gagal bind port ephemeral: {}", e))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let app = crate::static_app(paths.dir.clone());
     let serve = std::future::IntoFuture::into_future(axum::serve(listener, app));
     let handle = tokio::spawn(serve);
-    let result = wait_marker(port, marker, engine_timeout("static"), None).await;
+    let result = wait_marker(probe_host, port, marker, engine_timeout("static"), None).await;
     handle.abort();
-    result.map(|_| format!("Marker terverifikasi via HTTP GET / di port {}", port))
+    result.map(|_| {
+        format!(
+            "Marker terverifikasi via HTTP GET / di {}:{}",
+            probe_host, port
+        )
+    })
 }
 
 async fn run_http_engine(
@@ -398,15 +449,17 @@ async fn run_http_engine(
     engine: &str,
     paths: &EnginePaths,
     marker: &str,
+    bind_host: &str,
+    probe_host: &str,
 ) -> Result<String, String> {
     let port = free_port()?;
     if engine == "node" {
         // Node Android tidak punya binary PATH; ia berjalan lewat
         // NodeService, jadi tangani sebelum pencarian binary.
         let script = paths.dir.join("server.js");
-        std::fs::write(&script, selftest_node_script(marker, port))
+        std::fs::write(&script, selftest_node_script(marker, port, bind_host))
             .map_err(|e| format!("Gagal menulis skrip Node self-test: {}", e))?;
-        return run_node_selftest(state, paths, &script, port, marker).await;
+        return run_node_selftest(state, paths, &script, bind_host, probe_host, port, marker).await;
     }
     let binary = crate::process::find_engine_binary(state, engine)
         .ok_or_else(|| format!("Binary engine {} tidak ditemukan", engine))?;
@@ -415,11 +468,14 @@ async fn run_http_engine(
             let settings = crate::php::load_php_settings(&state.pool).await;
             let ini = crate::php::write_php_ini(&paths.dir, &settings)
                 .map_err(|e| format!("Gagal menulis php.ini self-test: {}", e))?;
-            (php_launch(&binary, port, &paths.dir, &ini), paths.dir.clone())
+            (
+                php_launch(&binary, bind_host, port, &paths.dir, &ini),
+                paths.dir.clone(),
+            )
         }
         "caddy" | "nginx" | "apache" => {
             let input = crate::webservers::WebServerInput {
-                host: "127.0.0.1".to_string(),
+                host: bind_host.to_string(),
                 port,
                 doc_root: paths.dir.clone(),
                 project_path: paths.dir.clone(),
@@ -460,21 +516,38 @@ async fn run_http_engine(
             } else {
                 Vec::new()
             };
-            (python_launch(&binary, &script, port, extra), paths.dir.clone())
+            (
+                python_launch(&binary, &script, bind_host, port, extra),
+                paths.dir.clone(),
+            )
         }
         other => return Err(format!("Engine {} tidak dikenal untuk self-test HTTP", other)),
     };
     let mut child = spawn_selftest_child(state, &launch, &home)?;
-    let result = wait_marker(port, marker, engine_timeout(engine), Some(&mut child)).await;
+    let result = wait_marker(
+        probe_host,
+        port,
+        marker,
+        engine_timeout(engine),
+        Some(&mut child),
+    )
+    .await;
     let _ = child.child.kill().await;
     let _ = child.child.wait().await;
-    result.map(|_| format!("Marker terverifikasi via HTTP GET / di port {}", port))
+    result.map(|_| {
+        format!(
+            "Marker terverifikasi via HTTP GET / di {}:{}",
+            probe_host, port
+        )
+    })
 }
 
 async fn run_node_selftest(
     state: &AppState,
     paths: &EnginePaths,
     script: &Path,
+    bind_host: &str,
+    probe_host: &str,
     port: u16,
     marker: &str,
 ) -> Result<String, String> {
@@ -506,9 +579,12 @@ async fn run_node_selftest(
         }
         let deadline = tokio::time::Instant::now() + engine_timeout("node");
         let result = loop {
-            if let Some(body) = http_get(port).await {
+            if let Some(body) = http_get(probe_host, port).await {
                 if body.contains(marker) {
-                    break Ok(format!("Marker terverifikasi via HTTP GET / di port {}", port));
+                    break Ok(format!(
+                        "Marker terverifikasi via HTTP GET / di {}:{}",
+                        probe_host, port
+                    ));
                 }
             }
             let status = std::fs::read_to_string(&status_path).unwrap_or_default();
@@ -537,12 +613,24 @@ async fn run_node_selftest(
     {
         let binary = crate::process::find_engine_binary(state, "node")
             .ok_or_else(|| "Binary Node tidak ditemukan".to_string())?;
-        let launch = node_launch(&binary, script, port);
+        let launch = node_launch(&binary, script, bind_host, port);
         let mut child = spawn_selftest_child(state, &launch, &paths.dir)?;
-        let result = wait_marker(port, marker, engine_timeout("node"), Some(&mut child)).await;
+        let result = wait_marker(
+            probe_host,
+            port,
+            marker,
+            engine_timeout("node"),
+            Some(&mut child),
+        )
+        .await;
         let _ = child.child.kill().await;
         let _ = child.child.wait().await;
-        result.map(|_| format!("Marker terverifikasi via HTTP GET / di port {}", port))
+        result.map(|_| {
+            format!(
+                "Marker terverifikasi via HTTP GET / di {}:{}",
+                probe_host, port
+            )
+        })
     }
 }
 
@@ -854,6 +942,55 @@ fn host_mariadb_binary_share() -> Result<(PathBuf, PathBuf), String> {
     Err("Share MariaDB (mysql_system_tables.sql) tidak ditemukan untuk self-test".to_string())
 }
 
+async fn run_http_with_lan(
+    state: &AppState,
+    engine: &str,
+    paths: &EnginePaths,
+    marker: &str,
+) -> EngineOutcome {
+    let loopback = if engine == "static" {
+        run_static(state, paths, marker, "127.0.0.1", "127.0.0.1").await
+    } else {
+        run_http_engine(state, engine, paths, marker, "127.0.0.1", "127.0.0.1").await
+    };
+    let detail = match loopback {
+        Ok(detail) => detail,
+        Err(error) => return EngineOutcome::err(error),
+    };
+    let Some(lan_ip) = crate::network::lan_ip() else {
+        return EngineOutcome {
+            detail,
+            error: None,
+            lan_ok: None,
+            lan_detail: Some(
+                "IP LAN perangkat tidak terdeteksi; jalur LAN tidak diuji".to_string(),
+            ),
+            lan_error: None,
+        };
+    };
+    let lan = if engine == "static" {
+        run_static(state, paths, marker, "0.0.0.0", &lan_ip).await
+    } else {
+        run_http_engine(state, engine, paths, marker, "0.0.0.0", &lan_ip).await
+    };
+    match lan {
+        Ok(lan_detail) => EngineOutcome {
+            detail,
+            error: None,
+            lan_ok: Some(true),
+            lan_detail: Some(lan_detail),
+            lan_error: None,
+        },
+        Err(error) => EngineOutcome {
+            detail,
+            error: Some(format!("Jalur LAN gagal: {}", error)),
+            lan_ok: Some(false),
+            lan_detail: None,
+            lan_error: Some(error),
+        },
+    }
+}
+
 /// Jalankan self-test untuk engine yang diminta (semua bila `engines`
 /// kosong/None). Hasil selalu per engine, berurutan sesuai
 /// SELFTEST_ENGINES.
@@ -874,13 +1011,12 @@ pub async fn run_self_test(state: &AppState, engines: Option<Vec<String>>) -> Ve
     for engine in requested {
         let started = Instant::now();
         let runtime = runtimes.iter().find(|r| r.id == engine);
-        let result = match runtime {
-            Some(r) if !r.available => Err((
-                String::new(),
+        let outcome = match runtime {
+            Some(r) if !r.available => EngineOutcome::err(
                 r.reason
                     .clone()
                     .unwrap_or_else(|| format!("Runtime {} tidak tersedia", engine)),
-            )),
+            ),
             _ => {
                 let dir = base.join(engine);
                 let marker = selftest_marker(engine);
@@ -890,26 +1026,35 @@ pub async fn run_self_test(state: &AppState, engines: Option<Vec<String>>) -> Ve
                     Ok(()) => {
                         let paths = EnginePaths { base: base.clone(), dir: dir.clone() };
                         let outcome = match engine {
-                            "static" => run_static(state, &paths, &marker).await,
-                            "postgresql" => run_postgres_selftest(state, &paths).await,
-                            "mariadb" => run_mariadb_selftest(state, &paths).await,
-                            _ => run_http_engine(state, engine, &paths, &marker).await,
+                            "postgresql" => match run_postgres_selftest(state, &paths).await {
+                                Ok(detail) => EngineOutcome::ok(detail),
+                                Err(error) => EngineOutcome::err(error),
+                            },
+                            "mariadb" => match run_mariadb_selftest(state, &paths).await {
+                                Ok(detail) => EngineOutcome::ok(detail),
+                                Err(error) => EngineOutcome::err(error),
+                            },
+                            _ => run_http_with_lan(state, engine, &paths, &marker).await,
                         };
                         let _ = std::fs::remove_dir_all(&dir);
-                        outcome.map_err(|e| (String::new(), e))
+                        outcome
                     }
-                    Err(e) => Err((
-                        String::new(),
-                        format!("Gagal menyiapkan direktori self-test: {}", e),
+                    Err(e) => EngineOutcome::err(format!(
+                        "Gagal menyiapkan direktori self-test: {}",
+                        e
                     )),
                 }
             }
         };
         let duration_ms = started.elapsed().as_millis() as u64;
-        results.push(match result {
-            Ok(detail) => ok_result(engine, duration_ms, detail),
-            Err((detail, error)) => fail_result(engine, duration_ms, detail, error),
-        });
+        let mut result = match outcome.error {
+            None => ok_result(engine, duration_ms, outcome.detail),
+            Some(error) => fail_result(engine, duration_ms, outcome.detail, error),
+        };
+        result.lan_ok = outcome.lan_ok;
+        result.lan_detail = outcome.lan_detail;
+        result.lan_error = outcome.lan_error;
+        results.push(result);
     }
     let _ = std::fs::remove_dir_all(&base);
     results
@@ -931,14 +1076,14 @@ mod tests {
         let script = selftest_python_script("MARKER-123");
         assert!(script.contains("MARKER-123"));
         assert!(script.contains("os.environ.get('PORT'"));
-        assert!(script.contains("127.0.0.1"));
+        assert!(script.contains("os.environ.get('HOST', '127.0.0.1')"));
     }
 
     #[test]
     fn node_script_serves_marker_on_literal_port() {
-        let script = selftest_node_script("MARKER-456", 18080);
+        let script = selftest_node_script("MARKER-456", 18080, "0.0.0.0");
         assert!(script.contains("MARKER-456"));
-        assert!(script.contains("listen(18080, '127.0.0.1')"));
+        assert!(script.contains("listen(18080, \"0.0.0.0\")"));
     }
 
     #[test]
@@ -946,13 +1091,14 @@ mod tests {
         let docroot = Path::new("/data/selftest/php");
         let php = php_launch(
             Path::new("/lib/libphp.so"),
+            "0.0.0.0",
             18081,
             docroot,
             Path::new("/data/selftest/php/php.ini"),
         );
         assert_eq!(
             php.args,
-            vec!["-S", "127.0.0.1:18081", "-t", "/data/selftest/php", "-c", "/data/selftest/php/php.ini"]
+            vec!["-S", "0.0.0.0:18081", "-t", "/data/selftest/php", "-c", "/data/selftest/php/php.ini"]
         );
         assert_eq!(php.cwd, docroot);
 
@@ -995,19 +1141,23 @@ mod tests {
         let python = python_launch(
             Path::new("/lib/libpython.so"),
             Path::new("/data/selftest/python/server.py"),
+            "0.0.0.0",
             18082,
             Vec::new(),
         );
         assert_eq!(python.args, vec!["/data/selftest/python/server.py"]);
+        assert!(python.envs.contains(&("HOST".to_string(), "0.0.0.0".to_string())));
         assert!(python.envs.contains(&("PORT".to_string(), "18082".to_string())));
         assert_eq!(python.cwd, PathBuf::from("/data/selftest/python"));
 
         let node = node_launch(
             Path::new("/usr/bin/node"),
             Path::new("/data/selftest/node/server.js"),
+            "0.0.0.0",
             18083,
         );
         assert_eq!(node.args, vec!["/data/selftest/node/server.js"]);
+        assert!(node.envs.contains(&("HOST".to_string(), "0.0.0.0".to_string())));
         assert!(node.envs.contains(&("PORT".to_string(), "18083".to_string())));
     }
 

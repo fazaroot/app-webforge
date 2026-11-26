@@ -79,6 +79,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/servers/:id/config", get(servers::get_config).put(servers::put_config))
         .route("/api/servers/:id/validate-config", post(servers::validate_config))
         .route("/api/servers/:id/reload", post(servers::reload_server))
+        .route("/api/servers/:id/test-lan", post(servers::test_lan))
         .route("/api/runtimes/python/info", get(runtimes::python_info))
         .route("/api/projects/:id/python", get(runtimes::project_python))
         .route("/api/projects/:id/python/venv", post(runtimes::create_python_venv))

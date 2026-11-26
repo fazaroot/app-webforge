@@ -17,7 +17,7 @@ pub async fn init_pool(config: &Config) -> Result<SqlitePool, Box<dyn std::error
     sqlx::migrate!("./migrations").run(&pool).await?;
     // Honest startup state: processes from a previous run are gone.
     sqlx::query(
-        "UPDATE server_instances SET status='stopped', pid=NULL, error_message=NULL, updated_at=?1 WHERE status IN ('running','starting','stopping')",
+        "UPDATE server_instances SET status='stopped', pid=NULL, error_message=NULL, health_failures=0, auto_restart_count=0, updated_at=?1 WHERE status IN ('running','degraded','starting','stopping')",
     )
     .bind(crate::util::now_iso())
     .execute(&pool)

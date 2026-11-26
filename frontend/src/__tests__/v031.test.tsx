@@ -171,10 +171,10 @@ describe('SelfTestPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Uji Semua Engine' }));
     expect(await screen.findByText('static')).toBeInTheDocument();
     expect(screen.getByText('Lolos')).toBeInTheDocument();
-    expect(screen.getByText('HTTP 200 dari server uji')).toBeInTheDocument();
+    expect(screen.getByText(/HTTP 200 dari server uji/)).toBeInTheDocument();
     expect(screen.getByText('php')).toBeInTheDocument();
     expect(screen.getByText('Gagal')).toBeInTheDocument();
-    expect(screen.getByText('server tidak merespons')).toBeInTheDocument();
+    expect(screen.getByText(/server tidak merespons/)).toBeInTheDocument();
     expect(screen.getByText(/Error: timeout menunggu port/)).toBeInTheDocument();
     expect(screen.getByText('Durasi: 3000 ms')).toBeInTheDocument();
   });

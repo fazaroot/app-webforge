@@ -124,12 +124,12 @@ fn apache_quoted(path: &Path) -> String {
 
 /// Hasilkan Caddyfile untuk satu instance.
 ///
-/// Site address memakai skema `http://` eksplisit agar Caddy tidak
-/// mencoba TLS otomatis (ACME/internal CA) untuk alamat lokal. Log
-/// diarahkan ke stderr agar tertangkap log per-server core.
+/// Site address memakai `:port` catch-all agar Host LAN dan loopback
+/// sama-sama dilayani; alamat bind dibatasi eksplisit oleh direktif
+/// `bind`. `auto_https off` mencegah TLS otomatis untuk alamat lokal.
+/// Log diarahkan ke stderr agar tertangkap log per-server core.
 pub fn generate_caddyfile(input: &WebServerInput) -> String {
     let home = server_home(&input.data_dir, &input.server_id, "caddy");
-    let addr = format_host_port(&input.host, input.port);
     let root = caddy_path(&input.doc_root);
     let storage = caddy_path(&home.join("caddy-data"));
     let (handler, handler_comment) = match input.proxy_port {
@@ -153,7 +153,8 @@ pub fn generate_caddyfile(input: &WebServerInput) -> String {
          \x20   }}\n\
          }}\n\
          \n\
-         http://{addr} {{\n\
+         :{port} {{\n\
+         \x20   bind {host}\n\
          \x20   root * {root}\n\
          \x20   {handler_comment}{handler}\n\
          \x20   log {{\n\
@@ -161,7 +162,8 @@ pub fn generate_caddyfile(input: &WebServerInput) -> String {
          \x20   }}\n\
          }}\n",
         storage = storage,
-        addr = addr,
+        port = input.port,
+        host = input.host,
         root = root,
         handler_comment = handler_comment,
         handler = handler,
@@ -237,14 +239,15 @@ fn apache_mime_types() -> String {
 /// `include mime.types;` bersifat relatif terhadap prefix (`-p` server
 /// home), dan [`write_config`] menulis file itu di server home. Semua
 /// path runtime (pid, error log, temp path) berada di server home karena
-/// prefix compile-time tidak ada di Android. Access log dimatikan agar
-/// file log tidak tumbuh tanpa batas di HP; error log tetap ditulis ke
-/// file di server home.
+/// prefix compile-time tidak ada di Android. Error log dan access log
+/// ditulis ke file di server home agar core dapat men-tail keduanya ke
+/// pusat log.
 pub fn generate_nginx_config(input: &WebServerInput) -> String {
     let home = server_home(&input.data_dir, &input.server_id, "nginx");
     let addr = format_host_port(&input.host, input.port);
     let pid = nginx_path(&home.join("nginx.pid"));
     let error_log = nginx_path(&home.join("logs").join("error.log"));
+    let access_log = nginx_path(&home.join("logs").join("access.log"));
     let root = nginx_path(&input.doc_root);
     let tmp = home.join("tmp");
     let client_body_tmp = nginx_path(&tmp.join("client_body"));
@@ -289,7 +292,7 @@ pub fn generate_nginx_config(input: &WebServerInput) -> String {
          http {{\n\
          \x20   include mime.types;\n\
          \x20   default_type application/octet-stream;\n\
-         \x20   access_log off;\n\
+         \x20   access_log {access_log};\n\
          \x20   sendfile on;\n\
          \x20   client_max_body_size 64m;\n\
          \x20   client_body_temp_path {client_body_tmp};\n\
@@ -309,6 +312,7 @@ pub fn generate_nginx_config(input: &WebServerInput) -> String {
          }}\n",
         pid = pid,
         error_log = error_log,
+        access_log = access_log,
         client_body_tmp = client_body_tmp,
         proxy_tmp = proxy_tmp,
         fastcgi_tmp = fastcgi_tmp,
@@ -350,6 +354,7 @@ pub fn generate_httpd_config(input: &WebServerInput) -> Result<String, String> {
     let error_log = apache_quoted(&home.join("logs").join("error.log"));
     let access_log = apache_quoted(&home.join("logs").join("access.log"));
     let types_config = apache_quoted(&home.join("mime.types"));
+    let scoreboard_file = apache_quoted(&home.join("logs").join("scoreboard"));
     let runtime_dir = apache_quoted(&home.join("logs"));
     let doc_root = apache_quoted(&input.doc_root);
     let logs_dir = path_str(&home.join("logs"));
@@ -373,8 +378,11 @@ pub fn generate_httpd_config(input: &WebServerInput) -> Result<String, String> {
          LogLevel warn\n\
          CustomLog {access_log} common\n\
          TypesConfig {types_config}\n\
+         ScoreBoardFile {scoreboard_file}\n\
          DefaultRuntimeDir {runtime_dir}\n\
          Mutex {mutex}\n\
+         AcceptFilter http none\n\
+         HostnameLookups Off\n\
          ServerTokens Prod\n\
          ServerSignature Off\n\
          TraceEnable Off\n\
@@ -421,6 +429,7 @@ pub fn generate_httpd_config(input: &WebServerInput) -> Result<String, String> {
         error_log = error_log,
         access_log = access_log,
         types_config = types_config,
+        scoreboard_file = scoreboard_file,
         runtime_dir = runtime_dir,
         mutex = mutex,
         doc_root = doc_root,
@@ -608,7 +617,9 @@ mod tests {
     fn caddyfile_static_has_bind_root_and_file_server() {
         let text = generate_caddyfile(&sample_input(None));
         assert!(text.contains("admin off"), "caddyfile: {}", text);
-        assert!(text.contains("http://127.0.0.1:8080"), "caddyfile: {}", text);
+        assert!(text.contains(":8080 {"), "caddyfile: {}", text);
+        assert!(text.contains("bind 127.0.0.1"), "caddyfile: {}", text);
+        assert!(!text.contains("http://127.0.0.1:8080"), "caddyfile: {}", text);
         assert!(
             text.contains("root * /data/workspace/site/public"),
             "caddyfile: {}",
@@ -617,12 +628,24 @@ mod tests {
         assert!(text.contains("file_server"), "caddyfile: {}", text);
         assert!(text.contains("output stderr"), "caddyfile: {}", text);
         assert!(!text.contains("reverse_proxy"), "caddyfile: {}", text);
+
+        let mut lan = sample_input(None);
+        lan.host = "0.0.0.0".to_string();
+        let lan_text = generate_caddyfile(&lan);
+        assert!(lan_text.contains(":8080 {"), "caddyfile LAN: {}", lan_text);
+        assert!(lan_text.contains("bind 0.0.0.0"), "caddyfile LAN: {}", lan_text);
+        assert!(
+            !lan_text.contains("http://0.0.0.0:8080"),
+            "caddyfile LAN: {}",
+            lan_text
+        );
     }
 
     #[test]
     fn caddyfile_proxy_has_reverse_proxy() {
         let text = generate_caddyfile(&sample_input(Some(9000)));
-        assert!(text.contains("http://127.0.0.1:8080"), "caddyfile: {}", text);
+        assert!(text.contains(":8080 {"), "caddyfile: {}", text);
+        assert!(text.contains("bind 127.0.0.1"), "caddyfile: {}", text);
         assert!(
             text.contains("root * /data/workspace/site/public"),
             "caddyfile: {}",
@@ -651,6 +674,12 @@ mod tests {
             "nginx: {}",
             text
         );
+        assert!(
+            text.contains("access_log /data/webforge/servers/srv-1/nginx/logs/access.log;"),
+            "nginx: {}",
+            text
+        );
+        assert!(!text.contains("access_log off;"), "nginx: {}", text);
         assert!(text.contains("include mime.types;"), "nginx: {}", text);
         assert!(text.contains("listen 127.0.0.1:8080;"), "nginx: {}", text);
         assert!(
@@ -737,6 +766,13 @@ mod tests {
             text
         );
         assert!(text.contains("DirectoryIndex index.html"), "httpd: {}", text);
+        assert!(
+            text.contains("ScoreBoardFile \"/data/webforge/servers/srv-1/apache/logs/scoreboard\""),
+            "httpd: {}",
+            text
+        );
+        assert!(text.contains("AcceptFilter http none"), "httpd: {}", text);
+        assert!(text.contains("HostnameLookups Off"), "httpd: {}", text);
         assert!(
             !text
                 .lines()

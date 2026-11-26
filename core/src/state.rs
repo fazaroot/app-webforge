@@ -1,7 +1,7 @@
 use crate::config::Config;
 use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -46,6 +46,12 @@ pub fn data_dir() -> Option<PathBuf> {
 
 pub enum ProcessHandle {
     Child(Arc<Mutex<Option<Child>>>),
+    /// Mode komposit Nginx/Caddy + PHP: proses frontend web server dan
+    /// backend `php -S` internal harus hidup/mati sebagai satu server.
+    Composite {
+        frontend: Arc<Mutex<Option<Child>>>,
+        backend: Arc<Mutex<Option<Child>>>,
+    },
     InProcess(tokio::task::AbortHandle),
     /// Server Node di proses Android :node; AbortHandle adalah watcher
     /// core (tail log + auto-restart), prosesnya dihentikan lewat JNI.
@@ -66,6 +72,13 @@ pub struct AppState {
     /// Ekor stderr per server (in-memory, dibatasi process.rs) untuk
     /// error_message jujur saat health check gagal.
     pub process_stderr: Arc<Mutex<HashMap<String, std::collections::VecDeque<String>>>>,
+    /// Task tail file log Apache/Nginx per server; di-abort saat stop.
+    pub log_tail_tasks: Arc<Mutex<HashMap<String, Vec<tokio::task::AbortHandle>>>>,
+    /// Offset tail per file log agar restart tidak menduplikasi baris lama.
+    pub log_tail_offsets: Arc<Mutex<HashMap<String, u64>>>,
+    /// Server yang sedang di-restart supervisor kesehatan; mencegah
+    /// restart ganda dari siklus probe berikutnya.
+    pub health_restarting: Arc<Mutex<HashSet<String>>>,
 }
 
 impl AppState {

@@ -18,7 +18,14 @@ export function SelfTestResults({ results }: { results: SelfTestEngineResult[] }
             </span>
           </div>
           <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">Durasi: {r.duration_ms} ms</p>
-          {r.detail && <p className="text-xs mt-1 break-all">{r.detail}</p>}
+          {r.detail && <p className="text-xs mt-1 break-all">Loopback: {r.detail}</p>}
+          {(r.lan_ok !== undefined && r.lan_ok !== null || r.lan_detail || r.lan_error) && (
+            <p className="text-xs mt-1 break-all">
+              LAN: {r.lan_ok === true ? 'Lolos' : r.lan_ok === false ? 'Gagal' : 'Tidak diuji'}
+              {r.lan_detail ? ` · ${r.lan_detail}` : ''}
+            </p>
+          )}
+          {r.lan_error && <p className="text-xs text-danger mt-1 break-all">Error LAN: {r.lan_error}</p>}
           {r.error && <p className="text-xs text-danger mt-1 break-all">Error: {r.error}</p>}
         </div>
       ))}

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Play, RefreshCw, RotateCw, Square, Trash2 } from 'lucide-react';
-import { api } from '../lib/api';
+import { Play, RefreshCw, RotateCw, Square, Trash2, Wifi } from 'lucide-react';
+import { api, getPowerStatus, isNativeWebForge, openBatterySettings, requestIgnoreBatteryOptimizations } from '../lib/api';
 import { formatDateTime, formatUptime } from '../lib/format';
 import { isPhpProject } from '../lib/php';
-import type { CreateServerBody, Project, RuntimeInfo, ServerEngine, ServerInstance, ValidateConfigResult } from '../lib/types';
+import type { CreateServerBody, LanTestResult, Project, RuntimeInfo, ServerEngine, ServerInstance, ValidateConfigResult } from '../lib/types';
 import { Card, EmptyBox, ErrorBox, SkeletonRows, StatusPill, btnGhost, btnPrimary, inputCls } from '../components/ui';
 import { RuntimePanel } from '../components/RuntimePanel';
 import { PhpManager } from '../components/PhpManager';
@@ -134,7 +134,7 @@ function ServerConfigPanel({ server, onError }: { server: ServerInstance; onErro
             <button type="button" className={btnGhost} disabled={validate.isPending} onClick={() => validate.mutate()}>
               {validate.isPending ? 'Memvalidasi…' : 'Validasi'}
             </button>
-            {server.status === 'running' && (
+            {(server.status === 'running' || server.status === 'degraded') && (
               <button type="button" className={btnGhost} disabled={reload.isPending} onClick={() => reload.mutate()}>
                 <RefreshCw size={14} /> {reload.isPending ? 'Memuat ulang…' : 'Reload'}
               </button>
@@ -289,6 +289,58 @@ function NodePanel({ project }: { project: Project }) {
   );
 }
 
+function BatteryRestrictionBanner({ servers }: { servers: ServerInstance[] }) {
+  const [error, setError] = useState('');
+  const power = useQuery({
+    queryKey: ['power-status'],
+    queryFn: getPowerStatus,
+    enabled: isNativeWebForge(),
+    refetchInterval: 10000,
+  });
+  const hasActiveServer = servers.some((s) => ['starting', 'running', 'degraded'].includes(s.status));
+  if (!isNativeWebForge() || !hasActiveServer || !power.data || power.data.ignoringBatteryOptimizations) {
+    return null;
+  }
+  return (
+    <div className="rounded-lg bg-warning/10 border border-warning/40 text-sm px-3 py-2 space-y-2" role="alert">
+      <p>
+        <strong>Baterai aplikasi masih dibatasi Android.</strong> Selama server berjalan, pembatasan baterai dan
+        freezer HyperOS dapat membuat proses server tidak mendapat CPU saat aplikasi di background atau layar mati,
+        sehingga request bisa menggantung. Aplikasi tidak dapat memaksa pengecualian ini dari dalam.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          className={btnPrimary}
+          onClick={() => {
+            setError('');
+            requestIgnoreBatteryOptimizations()
+              .then(() => power.refetch())
+              .catch((e) => setError(errMsg(e)));
+          }}
+        >
+          Minta pengecualian baterai
+        </button>
+        <button
+          type="button"
+          className={btnGhost}
+          onClick={() => {
+            setError('');
+            openBatterySettings().catch((e) => setError(errMsg(e)));
+          }}
+        >
+          Buka pengaturan baterai
+        </button>
+      </div>
+      <p className="text-xs">
+        Panduan manual HyperOS: buka Pengaturan → Aplikasi → WebForge Mobile → Autostart, lalu aktifkan Autostart.
+        Status Autostart tidak dapat dideteksi atau diubah lewat API Android, jadi langkah ini harus dilakukan manual.
+      </p>
+      {error && <ErrorBox message={error} />}
+    </div>
+  );
+}
+
 export function Servers() {
   const qc = useQueryClient();
   const [projectId, setProjectId] = useState('');
@@ -301,6 +353,7 @@ export function Servers() {
   const [formError, setFormError] = useState('');
   const [logsFor, setLogsFor] = useState<string | null>(null);
   const [configFor, setConfigFor] = useState<string | null>(null);
+  const [lanResults, setLanResults] = useState<Record<string, LanTestResult>>({});
 
   const servers = useQuery({ queryKey: ['servers'], queryFn: api.servers, refetchInterval: 3000 });
   const projects = useQuery({ queryKey: ['projects'], queryFn: api.projects });
@@ -375,10 +428,22 @@ export function Servers() {
     onSuccess: () => { setFormError(''); invalidate(); },
     onError: onErr,
   });
+  const testLan = useMutation({
+    mutationFn: (id: string) => api.testLan(id),
+    onSuccess: (result, id) => {
+      setLanResults((prev) => ({ ...prev, [id]: result }));
+      setFormError('');
+    },
+    onError: onErr,
+  });
+
+  const apachePhpBlocked = selectedIsPhp && engine === 'apache';
+  const phpComposite = selectedIsPhp && (engine === 'nginx' || engine === 'caddy') && proxyPort.trim() === '';
 
   return (
     <div className="space-y-4">
       {formError && <ErrorBox message={formError} />}
+      <BatteryRestrictionBanner servers={servers.data ?? []} />
 
       <Card title="Buat server">
         <div className="space-y-2">
@@ -402,7 +467,25 @@ export function Servers() {
           )}
           <input className={inputCls} inputMode="numeric" placeholder="Port (1024–65535)" value={port} onChange={(e) => setPort(e.target.value)} />
           {!portValid && port !== '' && <p className="text-xs text-danger">Port harus bilangan 1024–65535.</p>}
-          {isWebServerEngine && (
+          {phpComposite && (
+            <div className="rounded-lg bg-success/10 border border-success/40 text-sm px-3 py-2">
+              Mode komposit PHP: {ENGINE_LABELS[engine]} akan me-proxy ke backend <span className="font-mono">php -S</span> internal
+              yang dinyalakan otomatis, sehingga index.php dieksekusi nyata.
+            </div>
+          )}
+          {apachePhpBlocked && (
+            <div className="rounded-lg bg-warning/10 border border-warning/40 text-sm px-3 py-2" role="alert">
+              Apache+PHP tidak tersedia di WebForge: index.php tidak akan dieksekusi oleh Apache.
+              Gunakan engine PHP, Nginx, atau Caddy untuk proyek PHP ini.
+            </div>
+          )}
+          {selectedIsPhp && engine === 'static' && (
+            <div className="rounded-lg bg-warning/10 border border-warning/40 text-sm px-3 py-2" role="alert">
+              Engine Static tidak mengeksekusi PHP. Proyek PHP tanpa index.html dapat menghasilkan 403/404 pada /.
+              Gunakan engine PHP, Nginx, atau Caddy agar index.php berjalan.
+            </div>
+          )}
+          {(engine === 'caddy' || engine === 'nginx') && (
             <>
               <label className="block text-sm">
                 <span className="text-xs font-medium text-slate-600 dark:text-slate-400">Port backend reverse proxy (opsional)</span>
@@ -410,6 +493,9 @@ export function Servers() {
               </label>
               {!proxyValid && <p className="text-xs text-danger">Port backend harus bilangan 1024–65535 atau dikosongkan.</p>}
             </>
+          )}
+          {engine === 'apache' && (
+            <p className="text-xs text-slate-600 dark:text-slate-400">Apache WebForge tidak mendukung reverse proxy karena mod_proxy tidak dikompilasi. Gunakan Caddy atau Nginx untuk reverse proxy.</p>
           )}
           {isCommandEngine && (
             <label className="block text-sm">
@@ -431,7 +517,7 @@ export function Servers() {
               Aktifkan hanya di jaringan tepercaya, dan matikan bila tidak diperlukan.
             </div>
           )}
-          <button type="button" className={btnPrimary} disabled={!projectId || !portValid || !proxyValid || create.isPending} onClick={() => create.mutate()}>
+          <button type="button" className={btnPrimary} disabled={!projectId || !portValid || !proxyValid || apachePhpBlocked || create.isPending} onClick={() => create.mutate()}>
             {create.isPending ? 'Membuat…' : 'Buat server'}
           </button>
           <p className="text-xs text-slate-600 dark:text-slate-400">Engine yang tampil hanya yang runtime-nya tersedia dan sesuai proyek terpilih. Bila Core menolak pembuatan server, pesan errornya ditampilkan apa adanya di atas.</p>
@@ -457,19 +543,49 @@ export function Servers() {
                   <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">Lokal: <span className="break-all">{s.url_local}</span></p>
                   <p className="text-xs text-slate-600 dark:text-slate-400">LAN: {s.url_lan ?? (s.bind_lan ? 'IP LAN tidak terdeteksi' : 'tidak dibuka')}</p>
                   {s.proxy_port !== null && s.proxy_port !== undefined && <p className="text-xs text-slate-600 dark:text-slate-400">Reverse proxy ke port backend: {s.proxy_port}</p>}
+                  {s.backend_port !== null && s.backend_port !== undefined && (
+                    <p className="text-xs text-slate-600 dark:text-slate-400">Backend PHP komposit internal: <span className="font-mono">127.0.0.1:{s.backend_port}</span></p>
+                  )}
                   {s.command && <p className="text-xs text-slate-600 dark:text-slate-400">Perintah: <span className="font-mono break-all">{s.command}</span></p>}
                   <p className="text-xs text-slate-600 dark:text-slate-400">
-                    {s.status === 'running' ? `Uptime ${formatUptime(s.uptime_seconds)} · mulai ${formatDateTime(s.started_at)}` : 'Tidak berjalan'}
+                    {(s.status === 'running' || s.status === 'degraded') ? `Uptime ${formatUptime(s.uptime_seconds)} · mulai ${formatDateTime(s.started_at)}` : 'Tidak berjalan'}
                     {s.pid !== null ? ` · PID ${s.pid}` : ''}{s.in_process ? ' · in-process' : ''}
                   </p>
+                  {s.warning_message && (
+                    <div className="rounded-lg bg-warning/10 border border-warning/40 text-xs px-3 py-2 mt-1" role="alert">
+                      {s.warning_message}
+                    </div>
+                  )}
+                  {(s.last_health_at || s.last_health_target || s.last_health_error) && (
+                    <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 break-all">
+                      Kesehatan terakhir: {s.last_health_target ?? '-'}
+                      {s.last_health_status !== null && s.last_health_status !== undefined ? ` · HTTP ${s.last_health_status}` : ''}
+                      {s.last_health_at ? ` · ${formatDateTime(s.last_health_at)}` : ''}
+                      {(s.health_failures ?? 0) > 0 ? ` · gagal beruntun ${s.health_failures}` : ''}
+                      {(s.auto_restart_count ?? 0) > 0 ? ` · restart otomatis ${s.auto_restart_count}` : ''}
+                      {s.last_health_error ? ` · ${s.last_health_error}` : ''}
+                    </p>
+                  )}
                   {s.error_message && <p className="text-xs text-danger mt-1">{s.error_message}</p>}
+                  {lanResults[s.id] && (
+                    <div className={`rounded-lg border px-3 py-2 mt-1 text-xs ${lanResults[s.id].ok ? 'bg-success/10 border-success/40' : 'bg-red-50 dark:bg-red-950 border-danger/40'}`}>
+                      <p className="font-medium">Tes Akses LAN: {lanResults[s.id].ok ? 'berhasil' : 'gagal'}</p>
+                      <p className="break-all">
+                        {lanResults[s.id].url ?? lanResults[s.id].target ?? '-'}
+                        {lanResults[s.id].status_code !== null ? ` · HTTP ${lanResults[s.id].status_code}` : ''}
+                        {` · ${lanResults[s.id].duration_ms} ms`}
+                      </p>
+                      {lanResults[s.id].error && <p className="text-danger break-all">{lanResults[s.id].error}</p>}
+                      {lanResults[s.id].warning && <p>{lanResults[s.id].warning}</p>}
+                    </div>
+                  )}
                   <div className="flex flex-wrap gap-2 mt-2">
                     {(s.status === 'stopped' || s.status === 'error') && (
                       <button type="button" className={btnPrimary} disabled={act.isPending} onClick={() => act.mutate({ id: s.id, action: 'start' })}>
                         <Play size={14} /> Start
                       </button>
                     )}
-                    {s.status === 'running' && (
+                    {(s.status === 'running' || s.status === 'degraded') && (
                       <>
                         <button type="button" className={btnGhost} disabled={act.isPending} onClick={() => act.mutate({ id: s.id, action: 'stop' })}>
                           <Square size={14} /> Stop
@@ -482,6 +598,9 @@ export function Servers() {
                             <RefreshCw size={14} /> Reload
                           </button>
                         )}
+                        <button type="button" className={btnGhost} disabled={testLan.isPending} onClick={() => testLan.mutate(s.id)}>
+                          <Wifi size={14} /> {testLan.isPending ? 'Menguji LAN…' : 'Tes Akses LAN'}
+                        </button>
                       </>
                     )}
                     {isWebServer && (
@@ -492,8 +611,8 @@ export function Servers() {
                     <button type="button" className={btnGhost} onClick={() => setLogsFor(logsFor === s.id ? null : s.id)}>
                       {logsFor === s.id ? 'Tutup log' : 'Log'}
                     </button>
-                    <button type="button" className={btnGhost} disabled={s.status === 'running' || remove.isPending}
-                      title={s.status === 'running' ? 'Stop server dulu sebelum menghapus' : 'Hapus server'}
+                    <button type="button" className={btnGhost} disabled={['running', 'degraded', 'starting', 'stopping'].includes(s.status) || remove.isPending}
+                      title={['running', 'degraded', 'starting', 'stopping'].includes(s.status) ? 'Stop server dulu sebelum menghapus' : 'Hapus server'}
                       onClick={() => { if (window.confirm('Hapus server ini?')) remove.mutate(s.id); }}>
                       <Trash2 size={14} /> Hapus
                     </button>
