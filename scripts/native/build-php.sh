@@ -545,12 +545,14 @@ verify_extension_symbols() {
     exit 1
   fi
   for ext in "${EXTENSIONS[@]}"; do
-    if ! printf '%s\n' "$nm_out" | grep -E "[[:space:]]phpext_${ext}_ptr$" >/dev/null; then
+    # Ekstensi statis mengekspor <ext>_module_entry; phpext_<ext>_ptr
+    # hanya ada pada build shared. Terima salah satu sebagai bukti.
+    if ! printf '%s\n' "$nm_out" | grep -E "[[:space:]](phpext_${ext}_ptr|${ext}_module_entry)$" >/dev/null; then
       missing+=("$ext")
     fi
   done
   if [ "${#missing[@]}" -ne 0 ]; then
-    echo "::error::Ekstensi hilang pada $label: ${missing[*]} (simbol phpext_<ext>_ptr tidak ditemukan)" >&2
+    echo "::error::Ekstensi hilang pada $label: ${missing[*]} (simbol <ext>_module_entry/phpext_<ext>_ptr tidak ditemukan)" >&2
     exit 1
   fi
   echo "OK: ${#EXTENSIONS[@]} ekstensi terverifikasi pada $label"
