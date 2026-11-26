@@ -469,7 +469,7 @@ echo "libc++ statis untuk intl:$CXX_STATIC_LIBS"
   export CFLAGS="-O2 -fPIC"
   export CXXFLAGS="-O2 -fPIC"
   export CPPFLAGS="-I$PREFIX/include"
-  export LDFLAGS="-L$PREFIX/lib"
+  export LDFLAGS="-L$PREFIX/lib -static-libstdc++"
   ./configure \
     --host=aarch64-linux-android \
     --build=x86_64-linux-gnu \
