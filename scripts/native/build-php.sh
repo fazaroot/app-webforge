@@ -547,7 +547,7 @@ verify_extension_symbols() {
   for ext in "${EXTENSIONS[@]}"; do
     # Ekstensi statis mengekspor <ext>_module_entry; phpext_<ext>_ptr
     # hanya ada pada build shared. Terima salah satu sebagai bukti.
-    if ! printf '%s\n' "$nm_out" | grep -E "[[:space:]](phpext_${ext}_ptr|${ext}_module_entry)$" >/dev/null; then
+    if ! printf '%s\n' "$nm_out" | grep -E "[[:space:]](phpext_${ext}_ptr|${ext}_module_entry|php_${ext}_module_entry)$" >/dev/null; then
       missing+=("$ext")
     fi
   done
